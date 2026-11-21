@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+    <title>Markdown review</title>
+    <link rel="stylesheet" href="/review.css">
+    <script src="/review.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#document">Skip to document</a>
+    <a class="skip-link skip-comments" href="#comments-heading">Skip to comments</a>
+
+    <header class="app-header">
+      <div class="header-top">
+        <a class="wordmark" href="#document" aria-label="Markdown review, go to document"><span class="wordmark-icon" aria-hidden="true">M</span>Markdown review</a>
+        <div class="header-actions">
+          <label class="theme-label" for="theme">Appearance</label>
+          <select id="theme" aria-label="Color theme">
+            <option value="auto">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+          <button id="finish" class="button button-outline" type="button" disabled>Finish review</button>
+        </div>
+      </div>
+      <div class="header-bottom">
+        <div class="document-identity">
+          <h1 id="document-title">Opening your document</h1>
+          <p id="file-path" class="file-path">Connecting to the local review session…</p>
+        </div>
+        <div class="session-meta">
+          <p class="target-label">Target <span id="target-session">—</span></p>
+          <span id="session-status" class="status-badge" data-status="loading">Connecting</span>
+        </div>
+      </div>
+    </header>
+
+    <div id="connection-banner" class="connection-banner" role="alert" hidden>
+      <p id="connection-message"></p>
+      <button id="retry-connection" class="button button-small button-outline" type="button">Try again</button>
+    </div>
+
+    <main class="workspace">
+      <section class="document-column" aria-label="Document preview">
+        <div class="document-toolbar">
+          <span id="document-caption">Document preview</span>
+          <span class="selection-instruction">Select text, then choose Comment, Delete, or Refine</span>
+        </div>
+        <div class="document-sheet">
+          <article id="document" class="markdown-body" tabindex="0" aria-label="Document to review" aria-busy="true">
+            <p class="document-placeholder">Loading document…</p>
+          </article>
+        </div>
+        <p id="source-status" class="source-status">Drafts stay in this tab. Nothing is sent until you apply feedback.</p>
+      </section>
+
+      <aside class="comments-sidebar" aria-labelledby="comments-heading">
+        <div class="sidebar-heading">
+          <div>
+            <p class="eyebrow">Your review</p>
+            <h2 id="comments-heading" tabindex="-1">Comments <span id="draft-count" class="count">0</span></h2>
+          </div>
+          <span class="private-label">Tab only</span>
+        </div>
+        <p class="sidebar-intro">Select a passage, then comment or add a one-click Delete or Refine instruction. Review drafts before sending them together.</p>
+        <div id="selection-actions" class="selection-actions" role="toolbar" aria-label="Actions for selected text" hidden>
+          <button id="comment-selection" class="selection-action" type="button" aria-label="Comment on selected text" title="Comment on selected text">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 5h14v10H9l-4 4V5Zm3 4h8M8 12h5"/></svg>
+            <span>Comment</span>
+          </button>
+          <button id="delete-selection" class="selection-action selection-action-danger" type="button" title="Add a draft asking to delete the selected text">Delete</button>
+          <button id="refine-selection" class="selection-action" type="button" title="Add a draft asking to refine the selected text">Refine</button>
+        </div>
+        <details id="keyboard-picker" class="keyboard-picker">
+          <summary>Choose a passage with the keyboard</summary>
+          <label class="field-label" for="keyboard-passage">Source passage</label>
+          <select id="keyboard-passage" aria-describedby="keyboard-help"></select>
+          <button id="use-keyboard-passage" class="button button-outline button-small" type="button" disabled>Use this passage</button>
+          <p id="keyboard-help" class="keyboard-hint">Choose a source block with the arrow keys, then use the selection popup to comment, delete, refine, or reselect a stale anchor.</p>
+        </details>
+        <p class="keyboard-hint">Escape closes the composer or passage picker.</p>
+
+        <div id="reanchor-notice" class="notice" role="status" hidden>
+          <p>Select the replacement passage in the current document. Your comment text will be kept.</p>
+          <button id="cancel-reanchor" class="text-button" type="button">Cancel reselect</button>
+        </div>
+
+        <form id="composer" class="composer" aria-labelledby="composer-heading" hidden>
+          <div class="composer-heading">
+            <h3 id="composer-heading">New comment</h3>
+            <div class="composer-heading-actions">
+              <button id="delete-comment" class="text-button remove-button" type="button" hidden>Delete</button>
+              <button id="cancel-composer" class="text-button" type="button" aria-label="Cancel comment">Cancel</button>
+            </div>
+          </div>
+          <blockquote id="composer-quote" class="quote"></blockquote>
+          <p id="composer-anchor" class="anchor-hint"></p>
+          <p id="composer-stale" class="stale-note" hidden>The source changed. Save this note, then reselect its passage before applying.</p>
+          <label class="field-label" for="comment-text">Your comment</label>
+          <textarea id="comment-text" name="comment" rows="4" maxlength="8000" required aria-describedby="comment-help"></textarea>
+          <div class="composer-footer">
+            <span id="comment-help" class="field-hint">Be specific about the change.</span>
+            <button id="save-comment" class="button button-primary button-small" type="submit">Save draft</button>
+          </div>
+        </form>
+
+        <p id="interaction-message" class="interaction-message" role="status" hidden></p>
+        <div id="empty-state" class="empty-state">
+          <span class="empty-mark" aria-hidden="true">“</span>
+          <h3>A fresh pair of eyes.</h3>
+          <p>Your saved comments will appear here, anchored to the passage you select.</p>
+        </div>
+        <ol id="draft-list" class="comment-list" aria-label="Draft comments"></ol>
+
+        <section id="submission" class="submission" aria-labelledby="submission-heading" hidden>
+          <div class="submission-heading">
+            <h3 id="submission-heading">Last submission</h3>
+            <span id="submission-status" class="status-badge"></span>
+          </div>
+          <p id="submission-message" class="submission-message" role="status"></p>
+          <p id="submission-id" class="submission-id"></p>
+          <button id="retry-submit" class="button button-outline button-small" type="button" hidden>Retry same submission</button>
+          <button id="restore-submitted" class="button button-outline button-small" type="button" hidden>Restore as drafts</button>
+          <details id="submitted-details" hidden>
+            <summary id="submitted-summary">Submitted comments</summary>
+            <ol id="submitted-list" class="comment-list submitted-list" aria-label="Submitted comments"></ol>
+          </details>
+        </section>
+
+        <div class="apply-panel">
+          <p id="apply-hint" class="apply-hint">Save a comment to start your review.</p>
+          <button id="apply-feedback" class="button button-primary apply-button" type="button" disabled>Apply feedback</button>
+          <p class="apply-footnote">Sends comments to the target session. The document updates when the source changes.</p>
+        </div>
+      </aside>
+    </main>
+
+    <div id="announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+    <noscript><p class="noscript-message">JavaScript is required for this local review. Enable it and reopen the capability link.</p></noscript>
+  </body>
+</html>

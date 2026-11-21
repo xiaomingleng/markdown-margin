@@ -1,0 +1,14 @@
+{
+  "name": "annotate-markdown-skill",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local Markdown selection comments with agent-mediated feedback.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test scripts/review.test.mjs"
+  },
+  "dependencies": {
+    "markdown-it": "14.3.2"
+  }
+}
