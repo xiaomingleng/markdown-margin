@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { fork } from 'node:child_process';
-import { createServer } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
 import { mkdtemp, readFile, realpath, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -340,16 +340,38 @@ async function loadSession(path) {
   return session;
 }
 async function api(session, path, body) {
-  const response = await fetch(`${session.origin}${path}`, {
-    method: body === undefined ? 'GET' : 'POST',
-    headers: { Authorization: `Bearer ${session.token}`, Origin: session.origin, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    redirect: 'error',
-    signal: AbortSignal.timeout(550000),
+  // Use node:http rather than global fetch: undici's default 300s headersTimeout
+  // would otherwise abort the long-polling `/api/wait` before its (up to) 540s
+  // response, surfacing as `fetch failed`.
+  const url = new URL(path, session.origin);
+  const data = body === undefined ? undefined : JSON.stringify(body);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (fn, value) => { if (!settled) { settled = true; clearTimeout(timer); fn(value); } };
+    const timer = setTimeout(() => settle(reject, new Error('Request timed out.')), 550000);
+    const request = httpRequest(url, {
+      method: data === undefined ? 'GET' : 'POST',
+      headers: {
+        Authorization: `Bearer ${session.token}`,
+        Origin: session.origin,
+        ...(data === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+    }, response => {
+      const chunks = [];
+      response.on('data', chunk => chunks.push(chunk));
+      response.on('error', error => settle(reject, error));
+      response.on('end', () => {
+        let value;
+        try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+        catch { settle(reject, new Error('The server returned an unreadable response.')); return; }
+        if (response.statusCode >= 200 && response.statusCode < 300) settle(resolve, value);
+        else settle(reject, new Error(value.error ?? `Request failed (${response.statusCode}).`));
+      });
+    });
+    request.on('error', error => settle(reject, error));
+    if (data !== undefined) request.write(data);
+    request.end();
   });
-  const value = await response.json();
-  if (!response.ok) throw new Error(value.error ?? `Request failed (${response.status}).`);
-  return value;
 }
 function options(args) {
   const result = { positional: [] };
