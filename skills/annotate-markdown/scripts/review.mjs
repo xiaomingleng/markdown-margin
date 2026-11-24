@@ -20,6 +20,44 @@ const ID = /^[a-zA-Z0-9_-]{1,80}$/;
 const validId = value => typeof value === 'string' && ID.test(value);
 const digest = text => createHash('sha256').update(text).digest('hex');
 
+// The preview server is loopback-only. Accept loopback hostnames (localhost, ::1,
+// 127.0.0.0/8) on the bound port so the same link works whether the browser reaches
+// it as 127.0.0.1 or localhost, while still rejecting foreign/DNS-rebinding hosts.
+function parseHost(hostHeader) {
+  if (typeof hostHeader !== 'string' || !hostHeader) return null;
+  let hostname;
+  let port = '';
+  if (hostHeader.startsWith('[')) {
+    const end = hostHeader.indexOf(']');
+    if (end === -1) return null;
+    hostname = hostHeader.slice(1, end);
+    const rest = hostHeader.slice(end + 1);
+    if (rest === '') return { hostname: hostname.toLowerCase(), port };
+    if (!rest.startsWith(':')) return null;
+    port = rest.slice(1);
+  } else {
+    const colon = hostHeader.lastIndexOf(':');
+    if (colon === -1) hostname = hostHeader;
+    else { hostname = hostHeader.slice(0, colon); port = hostHeader.slice(colon + 1); }
+  }
+  return { hostname: hostname.toLowerCase(), port };
+}
+function isLoopbackHostname(hostname) {
+  if (hostname === 'localhost' || hostname === '::1') return true;
+  const ip = hostname.startsWith('::ffff:') ? hostname.slice(7) : hostname;
+  const octets = ip.split('.');
+  return octets.length === 4 && octets[0] === '127' && octets.every(octet => /^\d{1,3}$/.test(octet) && Number(octet) <= 255);
+}
+function isLoopbackOrigin(originHeader, port) {
+  if (!originHeader || originHeader === 'null') return false;
+  try {
+    const url = new URL(originHeader);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && isLoopbackHostname(url.hostname) && url.port === String(port);
+  } catch {
+    return false;
+  }
+}
+
 class ReviewError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
@@ -130,6 +168,7 @@ export async function startReview(file, { targetSession = null, idleMs = 60 * 60
   let finished = false;
   let closed = false;
   let origin;
+  let listenPort;
   let finishTimer;
   let idleTimer;
   let cached;
@@ -192,9 +231,10 @@ export async function startReview(file, { targetSession = null, idleMs = 60 * 60
   }
   const server = createServer(async (request, response) => {
     try {
-      requireValue(request.headers.host === new URL(origin).host, 'Invalid host.', 403);
+      const host = parseHost(request.headers.host);
+      requireValue(host && isLoopbackHostname(host.hostname) && host.port === String(listenPort), 'Invalid host.', 403);
       const url = new URL(request.url, origin);
-      requireValue(!request.headers.origin || request.headers.origin === origin, 'Invalid origin.', 403);
+      requireValue(!request.headers.origin || isLoopbackOrigin(request.headers.origin, listenPort), 'Invalid origin.', 403);
       if (url.pathname.startsWith('/api/')) {
         const authorization = Buffer.from(request.headers.authorization ?? '');
         const expected = Buffer.from(`Bearer ${token}`);
@@ -283,7 +323,8 @@ export async function startReview(file, { targetSession = null, idleMs = 60 * 60
   server.headersTimeout = 10000;
   server.maxHeadersCount = 50;
   await new Promise((resolveListen, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolveListen); });
-  origin = `http://127.0.0.1:${server.address().port}`;
+  listenPort = server.address().port;
+  origin = `http://127.0.0.1:${listenPort}`;
   const session = { version: 1, origin, token, filePath, targetSession, pid: process.pid };
   try { await writeFile(sessionFile, JSON.stringify(session), { mode: 0o600, flag: 'wx' }); }
   catch (error) { await close(); throw error; }

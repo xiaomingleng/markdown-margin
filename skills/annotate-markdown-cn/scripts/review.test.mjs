@@ -471,17 +471,21 @@ test('all API routes require the exact Bearer capability, not query or cookie to
     'Same-origin GETs without Origin remain allowed when capability and Host are valid');
 });
 
-test('foreign, opaque, and same-port localhost Origins are rejected on API and assets', async t => {
+test('foreign and opaque Origins are rejected; loopback Origins are accepted', async t => {
   const review = await fixture(t);
   const port = new URL(review.origin).port;
-  for (const origin of ['https://example.invalid', 'null', `http://localhost:${port}`, `${review.origin}/`]) {
+  for (const origin of ['https://example.invalid', 'null']) {
     await review.api('/api/state', { headers: { Origin: origin }, status: 403, error: /origin/ });
     await review.api('/review.js', { headers: { Origin: origin }, status: 403, error: /origin/ });
+  }
+  // Loopback origins on the bound port (127.0.0.1 and localhost) are allowed.
+  for (const origin of [review.origin, `http://localhost:${port}`]) {
+    await review.api('/api/state', { headers: { Origin: origin }, status: 200 });
   }
   assert.equal((await review.api('/api/state')).hash, sha256(SOURCE));
 });
 
-test('Host validation rejects DNS-rebinding hosts even with valid Origin and authorization', async t => {
+test('Host validation rejects DNS-rebinding hosts but accepts loopback hostnames', async t => {
   const review = await fixture(t);
   const port = new URL(review.origin).port;
   // Native fetch in newer Node releases discards Host overrides. Use HTTP only here.
@@ -501,11 +505,17 @@ test('Host validation rejects DNS-rebinding hosts even with valid Origin and aut
       request.end();
     });
   }
-  for (const host of ['example.invalid', `localhost:${port}`, '127.0.0.1:1']) {
+  for (const host of ['example.invalid', '127.0.0.1:1']) {
     for (const path of ['/api/state', '/']) {
       const response = await requestWithHost(path, host);
       assert.equal(response.status, 403);
       assert.match(JSON.parse(response.text).error, /host/);
+    }
+  }
+  for (const host of [`127.0.0.1:${port}`, `localhost:${port}`]) {
+    for (const path of ['/api/state', '/']) {
+      const response = await requestWithHost(path, host);
+      assert.equal(response.status, 200);
     }
   }
 });
