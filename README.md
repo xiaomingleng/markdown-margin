@@ -1,87 +1,47 @@
 # Markdown Margin
 
-Margin is a local Markdown review skill. It opens a loopback-only browser
-preview where a reviewer can select text and submit comments to an agent, which
-then applies requested edits using its normal tools.
+Review Markdown in your browser, leave feedback where it belongs, and let your
+agent revise the source. Margin turns document review into a simple loop:
+**read, comment, apply, review again**.
 
-## Use
+## What you can do
 
-The skill is [annotate-markdown](skills/annotate-markdown/SKILL.md). Add that
-directory to a compatible agent's skill discovery path and ask it to review a
-local Markdown document. The skill describes the workflow, feedback handling,
-and optional routing to a specifically chosen live session.
+**Leave feedback where it belongs.** Select a passage to comment, or add a
+one-click **Delete** or **Refine** request.
 
-For Chinese instructions, use
-[annotate-markdown-cn](skills/annotate-markdown-cn/SKILL.md). Each variant
-includes its own scripts, assets, and dependencies and can be installed alone.
-The browser interface remains in English.
+![Selected text and the Comment, Delete, and Refine actions](docs/selection-demo.png)
 
-### Mermaid diagrams
+**Review drafts before applying.** Save and edit comments, then submit them
+together. The preview refreshes after your agent edits the source; existing
+drafts are kept and changed source anchors can be reselected.
 
-Fenced `mermaid` blocks render locally as diagrams. Compact icon buttons provide
-**Graph** and zoom controls on the left, with **Code** and **Comment on diagram**
-on the right; hover for titles. Graph and Code switch between the diagram and
-its unchanged source.
-Graphs initially fit the available width. **Zoom out**, **Fit graph**, and
-**Zoom in** icons on the left adjust the view; content and comment controls
-stay on the right. Zoomed graphs scroll horizontally when needed. Fit mode
-adapts to window resizing; manual zoom is kept when switching Graph/Code views.
-Use **Comment on diagram** for whole-diagram feedback, or select source text
-in Code view for a more specific comment. Both use the original fenced block's
-source-line anchors; generated SVG labels are not replacement offsets.
+![A saved comment with edit controls and the Apply feedback button](docs/comments-demo.png)
 
-Invalid diagrams show a rendering error and fall back to Code view, where
-comments remain available. Mermaid is a pinned skill-local dependency, not
-a CDN service. Rendering uses strict mode with HTML labels and diagram actions
-disabled. Inline SVG styles are allowed by the preview's content security
-policy; scripts remain local and external images and fonts remain blocked.
+**Review diagrams too.** View Mermaid diagrams with fit and zoom controls,
+switch to their source code, and comment on the whole graph or a code passage.
 
-### Host compatibility
+![Mermaid workflow with graph and zoom controls on the left and code and comment controls on the right](docs/mermaid-demo.png)
 
-The skills use the shared [Agent Skills](https://github.com/agentskills/agentskills)
-`SKILL.md` format, not a host-specific plugin. Skill installation locations and
-supported features vary by host; see the guides for
-[VS Code](https://code.visualstudio.com/docs/agent-customization/agent-skills),
-[GitHub Copilot](https://docs.github.com/en/copilot/concepts/customizations/agent-skills),
-[Claude Code](https://code.claude.com/docs/en/skills), and
-[Codex](https://developers.openai.com/codex/skills/). Install the complete
-directory of the desired variant in a host-supported location.
+## How to use
 
-The workflow requires a local Node.js runtime, a browser able to reach that
-runtime's loopback address, and a host that can run and monitor background
-commands. The optional cross-session relay also needs compatible session
-discovery and messaging tools. These capabilities are host-dependent, and
-remote or cloud agent environments may not be able to open the local preview.
-End-to-end integration has not been verified across these hosts.
+Use the [annotate-markdown skill](skills/annotate-markdown/SKILL.md).
+Node.js 22 or later is required; your agent can follow the skill's setup
+instructions.
 
-Node.js 22 or later is required. Install the skill-local locked dependencies
-when needed:
+The screenshots use the fictional [release review example](examples/release-review.md),
+which you can try with your agent.
 
-```sh
-npm ci --prefix skills/annotate-markdown --ignore-scripts --no-audit --no-fund
-```
+1. Ask your agent: **"Use annotate-markdown to review examples/release-review.md."**
+   Or use the slash command: `/annotate-markdown examples/release-review.md`.
+   Replace the path with your own document when ready.
+2. Open the local review link your agent provides.
+3. Select text, add feedback, and save your drafts. Nothing is submitted yet.
+4. Click **Apply feedback**. Your agent receives the comments and makes the
+   requested edits; review the refreshed preview.
+5. Choose **Finish review** when you're done.
 
-For the Chinese variant, use `skills/annotate-markdown-cn` as the prefix
-instead. The scripts and assets are duplicated so either skill can be installed
-independently; keep both implementations in sync when changing them.
+## Privacy
 
-The lockfile uses the public npm registry; access is required unless the
-dependencies are already cached.
-
-Run the tests:
-
-```sh
-npm test --prefix skills/annotate-markdown
-```
-
-CI runs both variants on Windows, Linux, and macOS with Node.js 22.
-The POSIX-only permission test is explicitly skipped on Windows.
-
-The preview server binds to loopback. Its URL contains a private capability
-token; do not share the URL or session descriptor. It does not publish documents,
-load remote images, edit the source directly, or call a model.
-
-Session descriptors are created with mode `0600` on POSIX systems. On Windows,
-access depends on inherited filesystem ACLs, not POSIX mode bits; the skill
-does not configure ACLs. Use a temporary directory whose ACLs restrict access
-to your account when reviewing private documents on a shared machine.
+The preview stays local. Keep its private review link to yourself.
+The browser never edits the source directly; changes go through your agent
+after you submit feedback.
