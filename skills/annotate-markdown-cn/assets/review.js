@@ -38,7 +38,8 @@
   let renderedSubmission = null;
   let mermaidPromise = null;
   let diagramSequence = 0;
-  const diagramZoom = new WeakMap();
+  const mediaZoom = new WeakMap();
+  const imageUrls = new Set();
 
   class ApiError extends Error {
     constructor(message, status = 0) {
@@ -169,12 +170,15 @@
     $("target-session").textContent = next.targetSession || "Current session";
     document.title = `${next.title || "Markdown"} · Review`;
     if (firstRender || sourceChanged) {
+      for (const url of imageUrls) URL.revokeObjectURL(url);
+      imageUrls.clear();
       // Document HTML comes from the local renderer with raw HTML disabled.
       article.innerHTML = next.html;
       article.setAttribute("aria-busy", "false");
       protectDocumentLinks();
       populateKeyboardPassages();
       renderMermaidDiagrams();
+      renderImages();
       selectionCandidate = null;
       positionSelectionOffer();
       if (sourceChanged) {
@@ -232,62 +236,63 @@
     return mermaidPromise;
   }
 
-  function setDiagramView(block, view) {
+  function setMediaView(block, view) {
     block.dataset.view = view;
-    block.querySelector("pre").hidden = view !== "code";
-    block.querySelector(".mermaid-preview").hidden = view !== "graph";
-    for (const button of block.querySelectorAll("[data-diagram-view]")) {
-      button.setAttribute("aria-pressed", String(button.dataset.diagramView === view));
+    block.querySelector("pre, .image-source").hidden = view !== "code";
+    block.querySelector(".mermaid-preview, .image-preview").hidden = view === "code";
+    for (const button of block.querySelectorAll("[data-diagram-view], [data-image-view]")) {
+      button.setAttribute("aria-pressed", String((button.dataset.diagramView || button.dataset.imageView) === view));
     }
-    if (view === "graph" && diagramZoom.get(block)?.fitted) fitDiagram(block);
+    if (view !== "code" && mediaZoom.get(block)?.fitted) fitMedia(block);
     clearSelectionOffer();
     if (composer) positionComposer();
   }
 
-  function diagramFitScale(block, width) {
-    const preview = block.querySelector(".mermaid-preview");
+  function mediaFitScale(block, width) {
+    const preview = block.querySelector(".mermaid-preview, .image-preview");
     const styles = window.getComputedStyle(preview);
     const available = preview.clientWidth - parseFloat(styles.paddingLeft) - parseFloat(styles.paddingRight);
     return Math.min(1, Math.max(1, available) / width);
   }
 
-  function setDiagramScale(block, scale, fitted) {
-    const state = diagramZoom.get(block);
-    if (!state || block.dataset.view !== "graph") return;
-    const minimum = Math.min(0.1, diagramFitScale(block, state.width));
+  function setMediaScale(block, scale, fitted) {
+    const state = mediaZoom.get(block);
+    if (!state || block.dataset.view === "code") return;
+    const minimum = Math.min(0.1, mediaFitScale(block, state.width));
     state.scale = Math.max(minimum, Math.min(3, scale));
     state.fitted = fitted;
-    block.querySelector(".mermaid-preview svg").setAttribute("width", String(state.width * state.scale));
-    block.querySelector('[data-diagram-zoom="out"]').disabled = state.scale <= minimum + 0.000001;
-    block.querySelector('[data-diagram-zoom="in"]').disabled = state.scale >= 3 - 0.000001;
-    const fitButton = block.querySelector('[data-diagram-zoom="fit"]');
+    block.querySelector(".mermaid-preview svg, .image-preview img").setAttribute("width", String(state.width * state.scale));
+    block.querySelector('[data-diagram-zoom="out"], [data-image-zoom="out"]').disabled = state.scale <= minimum + 0.000001;
+    block.querySelector('[data-diagram-zoom="in"], [data-image-zoom="in"]').disabled = state.scale >= 3 - 0.000001;
+    const fitButton = block.querySelector('[data-diagram-zoom="fit"], [data-image-zoom="fit"]');
     fitButton.disabled = false;
     fitButton.setAttribute("aria-pressed", String(fitted));
-    if (fitted) block.querySelector(".mermaid-preview").scrollLeft = 0;
+    if (fitted) block.querySelector(".mermaid-preview, .image-preview").scrollLeft = 0;
     clearSelectionOffer();
     if (composer) positionComposer();
   }
 
-  function fitDiagram(block) {
-    const state = diagramZoom.get(block);
-    if (state) setDiagramScale(block, diagramFitScale(block, state.width), true);
+  function fitMedia(block) {
+    const state = mediaZoom.get(block);
+    if (state) setMediaScale(block, mediaFitScale(block, state.width), true);
   }
 
-  function zoomDiagram(block, action) {
-    const state = diagramZoom.get(block);
+  function zoomMedia(block, action) {
+    const state = mediaZoom.get(block);
     if (!state) return;
-    if (action === "fit") fitDiagram(block);
-    else setDiagramScale(block, state.scale * (action === "in" ? 1.25 : 0.8), false);
-    announce(`Diagram zoom ${Math.round(state.scale * 100)} percent.`);
+    if (action === "fit") fitMedia(block);
+    else setMediaScale(block, state.scale * (action === "in" ? 1.25 : 0.8), false);
+    const label = block.classList.contains("image-block") ? "Image" : "Diagram";
+    announce(`${label} zoom ${Math.round(state.scale * 100)} percent.`);
   }
 
-  function commentOnDiagram(block) {
+  function commentOnMedia(block) {
     if (editingLocked()) return;
     const range = document.createRange();
-    range.selectNodeContents(block.querySelector("pre"));
+    range.selectNodeContents(block.querySelector("pre, .image-source"));
     const captured = captureRange(range);
     if (captured?.error) { notice(captured.error); return; }
-    if (!captured) { notice("This diagram has no source text to comment on."); return; }
+    if (!captured) { notice("This image or diagram has no source text to comment on."); return; }
     const rect = block.getBoundingClientRect();
     captured.placement = {
       top: rect.top + window.scrollY,
@@ -300,12 +305,12 @@
   function renderMermaidDiagrams() {
     for (const block of article.querySelectorAll(".mermaid-block")) {
       for (const button of block.querySelectorAll("[data-diagram-view]")) {
-        button.addEventListener("click", () => setDiagramView(block, button.dataset.diagramView));
+        button.addEventListener("click", () => setMediaView(block, button.dataset.diagramView));
       }
       for (const button of block.querySelectorAll("[data-diagram-zoom]")) {
-        button.addEventListener("click", () => zoomDiagram(block, button.dataset.diagramZoom));
+        button.addEventListener("click", () => zoomMedia(block, button.dataset.diagramZoom));
       }
-      block.querySelector("[data-diagram-comment]").addEventListener("click", () => commentOnDiagram(block));
+      block.querySelector("[data-diagram-comment]").addEventListener("click", () => commentOnMedia(block));
       void renderMermaidDiagram(block);
     }
   }
@@ -337,8 +342,8 @@
       }
       block.querySelector(".mermaid-preview").replaceChildren(diagram);
       if (diagram.viewBox.baseVal.width > 0) {
-        diagramZoom.set(block, { width: diagram.viewBox.baseVal.width, scale: 1, fitted: true });
-        fitDiagram(block);
+        mediaZoom.set(block, { width: diagram.viewBox.baseVal.width, scale: 1, fitted: true });
+        fitMedia(block);
       }
       block.querySelector('[data-diagram-view="graph"]').disabled = false;
     } catch (error) {
@@ -346,9 +351,71 @@
       const message = block.querySelector(".mermaid-error");
       message.textContent = `Diagram could not be rendered: ${error.message || "Unknown rendering error"}. Code remains available for review.`;
       message.hidden = false;
-      setDiagramView(block, "code");
+      setMediaView(block, "code");
     } finally {
       mount?.remove();
+    }
+  }
+
+  function renderImages() {
+    for (const block of article.querySelectorAll(".image-block")) {
+      for (const button of block.querySelectorAll("[data-image-view], [data-image-comment], [data-image-zoom]")) {
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (button.hasAttribute("data-image-comment")) commentOnMedia(block);
+          else if (button.dataset.imageZoom) zoomMedia(block, button.dataset.imageZoom);
+          else setMediaView(block, button.dataset.imageView);
+        });
+      }
+      if (block.dataset.imageUrl) void renderImage(block);
+    }
+  }
+
+  async function renderImage(block) {
+    let url = null;
+    try {
+      const response = await fetch(block.dataset.imageUrl, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+        credentials: "omit",
+        mode: "same-origin",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+        signal: AbortSignal.timeout(12000),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new ApiError(error.error || `Image request failed (${response.status}).`, response.status);
+      }
+      const bytes = await response.blob();
+      if (!block.isConnected) return;
+      const image = block.querySelector("img");
+      url = URL.createObjectURL(bytes);
+      imageUrls.add(url);
+      await new Promise((resolve, reject) => {
+        image.addEventListener("load", resolve, { once: true });
+        image.addEventListener("error", () => reject(new Error("The image could not be decoded")), { once: true });
+        image.src = url;
+      });
+      if (!block.isConnected) return;
+      image.hidden = false;
+      mediaZoom.set(block, { width: image.naturalWidth, scale: 1, fitted: true });
+      fitMedia(block);
+      block.querySelector('[role="status"]').remove();
+      block.querySelector('[data-image-view="image"]').disabled = false;
+    } catch (error) {
+      if (url) {
+        block.querySelector("img").removeAttribute("src");
+        URL.revokeObjectURL(url);
+        imageUrls.delete(url);
+      }
+      if (!block.isConnected) return;
+      const message = block.querySelector(".image-error");
+      const reason = (error.message || "Unknown image error").replace(/\.$/, "");
+      message.textContent = `Image could not be displayed: ${reason}. Code remains available for review.`;
+      message.hidden = false;
+      setMediaView(block, "code");
     }
   }
 
@@ -389,7 +456,9 @@
   function populateKeyboardPassages() {
     const options = [];
     for (const block of article.querySelectorAll(BLOCK_SELECTOR)) {
-      const text = block.textContent.trim();
+      const range = document.createRange();
+      range.selectNodeContents(block);
+      const text = sourceRangeText(range).trim();
       if (!text || block.querySelector(BLOCK_SELECTOR)) continue;
       const option = document.createElement("option");
       option.value = block.dataset.blockId;
@@ -404,8 +473,8 @@
     const id = $("keyboard-passage").value;
     const block = [...article.querySelectorAll(BLOCK_SELECTOR)].find((item) => item.dataset.blockId === id);
     if (!block) return;
-    const diagram = block.closest(".mermaid-block");
-    if (diagram) setDiagramView(diagram, "code");
+    const media = block.closest(".mermaid-block, .image-block");
+    if (media) setMediaView(media, "code");
     const range = document.createRange();
     range.selectNodeContents(block);
     const selection = window.getSelection();
@@ -435,7 +504,7 @@
     if (!current || range.collapsed || !article.contains(range.startContainer) || !article.contains(range.endContainer)) return null;
     const inDiagramUi = (node) => (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement)?.closest("[data-review-ui]");
     if (inDiagramUi(range.startContainer) || inDiagramUi(range.endContainer)) {
-      return { error: "Use Comment on diagram for the whole graph, or switch to Code to select a specific passage." };
+      return { error: "Use Comment on image or Comment on diagram, or switch to Code to select a specific passage." };
     }
     const quote = sourceRangeText(range);
     if (!quote.trim()) return null;
@@ -788,8 +857,8 @@
       notice("That source anchor is no longer visible. Reselect the passage to update it.");
       return;
     }
-    const diagram = block.closest(".mermaid-block");
-    if (diagram) setDiagramView(diagram, "code");
+    const media = block.closest(".mermaid-block, .image-block");
+    if (media) setMediaView(media, "code");
     block.classList.add("anchor-highlight");
     block.setAttribute("tabindex", "-1");
     block.scrollIntoView({ block: "center" });
@@ -903,7 +972,7 @@
     $("comment-selection").disabled = selectionDisabled;
     $("delete-selection").disabled = selectionDisabled;
     $("refine-selection").disabled = selectionDisabled;
-    for (const button of article.querySelectorAll("[data-diagram-comment]")) button.disabled = locked;
+    for (const button of article.querySelectorAll("[data-diagram-comment], [data-image-comment]")) button.disabled = locked;
     positionSelectionOffer();
     $("comment-text").disabled = locked && !finished;
     $("comment-text").readOnly = finished;
@@ -1107,8 +1176,8 @@
   });
   window.addEventListener("scroll", schedulePlacement, { passive: true });
   window.addEventListener("resize", () => {
-    for (const block of article.querySelectorAll('.mermaid-block[data-view="graph"]')) {
-      if (diagramZoom.get(block)?.fitted) fitDiagram(block);
+    for (const block of article.querySelectorAll('.mermaid-block[data-view="graph"], .image-block[data-view="image"]')) {
+      if (mediaZoom.get(block)?.fitted) fitMedia(block);
     }
     schedulePlacement();
   });

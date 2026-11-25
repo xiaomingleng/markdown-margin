@@ -344,8 +344,8 @@ h1 {
 .mermaid-controls { right: 8px; }
 .mermaid-zoom-controls { left: 8px; }
 .mermaid-block[data-view="code"] [data-diagram-zoom] { display: none; }
-.mermaid-icon-button { width: 32px; min-height: 32px; padding: 6px; }
-.mermaid-icon-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.mermaid-icon-button, .image-icon-button { width: 32px; min-height: 32px; padding: 6px; }
+.mermaid-icon-button svg, .image-icon-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .mermaid-controls [aria-pressed="true"], .mermaid-zoom-controls [aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 .mermaid-block pre { margin: 0; padding-top: 48px; border: 0; border-radius: 0; }
 .mermaid-preview { overflow: auto; padding: 48px 20px 20px; background: #fff; color: #222; }
@@ -353,6 +353,16 @@ h1 {
 .mermaid-preview p { margin: 0; }
 .mermaid-error { padding: 12px; color: var(--text-strong); font-size: .85em; }
 .mermaid-render-target { position: absolute; left: -100000px; top: 0; width: 1000px; }
+.image-block { display: block; position: relative; margin: 1.3em 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.image-controls, .image-view-controls { position: absolute; top: 8px; z-index: 1; display: flex; gap: 4px; }
+.image-controls { right: 8px; }
+.image-view-controls { left: 8px; }
+.image-block[data-view="code"] [data-image-zoom] { display: none; }
+.image-controls [aria-pressed="true"], .image-view-controls [aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.image-preview { display: block; overflow: auto; padding: 48px 16px 16px; }
+.markdown-body .image-preview img { display: block; max-width: none; margin: 0 auto; }
+.markdown-body .image-source { display: block; padding: 48px 16px 16px; white-space: pre-wrap; }
+.image-error { display: block; padding: 12px; color: var(--text-strong); font-size: .85em; }
 .markdown-body table {
   display: block;
   width: max-content;

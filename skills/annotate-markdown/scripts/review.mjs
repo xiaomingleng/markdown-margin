@@ -4,9 +4,10 @@ import { fork } from 'node:child_process';
 import { createServer, request as httpRequest } from 'node:http';
 import { mkdtemp, readFile, realpath, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import MarkdownIt from 'markdown-it';
+import imageRule from 'markdown-it/lib/rules_inline/image.mjs';
 import rendererPackage from 'markdown-it/package.json' with { type: 'json' };
 import mermaidPackage from 'mermaid/package.json' with { type: 'json' };
 import skillPackage from '../package.json' with { type: 'json' };
@@ -16,6 +17,7 @@ const ASSETS = resolve(dirname(SCRIPT), '../assets');
 const MERMAID_DIST = resolve(dirname(fileURLToPath(import.meta.resolve('mermaid/package.json'))), 'dist');
 const MAX_SOURCE = 2 * 1024 * 1024;
 const MAX_BODY = 256 * 1024;
+const MAX_IMAGE = 8 * 1024 * 1024;
 const ACTIVE = new Set(['pending', 'delivered']);
 const HASH = /^[a-f0-9]{64}$/;
 const ID = /^[a-zA-Z0-9_-]{1,80}$/;
@@ -67,21 +69,106 @@ function requireValue(condition, message, status = 400) {
   if (!condition) throw new ReviewError(status, message);
 }
 
+function withinDirectory(directory, file) {
+  const path = relative(directory, file);
+  return path !== '' && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+}
+
+function imagePath(src, filePath) {
+  requireValue(filePath, 'Local images require a review session.');
+  let path;
+  try { path = decodeURIComponent(src); }
+  catch { throw new ReviewError(400, 'The image path is not valid.'); }
+  requireValue(path && !/^[a-z][a-z0-9+.-]*:|^[\\/]/i.test(path) && !path.includes('\0'),
+    'Only relative local images are supported; remote and absolute paths are blocked.');
+  const directory = dirname(filePath);
+  const file = resolve(directory, path);
+  requireValue(withinDirectory(directory, file), 'Images outside the document folder are blocked.', 403);
+  return file;
+}
+
+async function localImage(file, directory) {
+  let canonical;
+  try { canonical = await realpath(file); }
+  catch (error) {
+    if (['ENOENT', 'ENOTDIR'].includes(error.code)) throw new ReviewError(404, 'The local image was not found.');
+    throw error;
+  }
+  requireValue(withinDirectory(directory, canonical), 'Images outside the document folder are blocked.', 403);
+  const info = await stat(canonical);
+  requireValue(info.isFile() && info.size <= MAX_IMAGE, 'Images must be regular files under 8 MiB.', 413);
+  const bytes = await readFile(canonical);
+  requireValue(bytes.length <= MAX_IMAGE, 'The image exceeds 8 MiB.', 413);
+  let type;
+  if (bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) type = 'image/png';
+  else if (bytes.subarray(0, 3).equals(Buffer.from('ffd8ff', 'hex'))) type = 'image/jpeg';
+  else if (['GIF87a', 'GIF89a'].includes(bytes.subarray(0, 6).toString('ascii'))) type = 'image/gif';
+  else if (bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP') type = 'image/webp';
+  requireValue(type, 'Only PNG, JPEG, GIF, and WebP images are supported; SVG and other formats are blocked.', 415);
+  return { bytes, type };
+}
+
 export function createRenderer() {
   const md = new MarkdownIt({ html: false, linkify: false, typographer: false });
+  // Retain exact image syntax, including reference links, for source comments.
+  md.inline.ruler.at('image', (state, silent) => {
+    const start = state.pos;
+    const matched = imageRule(state, silent);
+    if (matched && !silent) state.tokens.at(-1).meta = { source: state.src.slice(start, state.pos) };
+    return matched;
+  });
   md.core.ruler.push('review-anchors', state => {
     let index = 0;
+    let imageIndex = 0;
+    let sourceMap;
     for (const token of state.tokens) {
+      if (token.map) sourceMap = token.map;
       if (token.map && token.type !== 'inline' && token.nesting !== -1) {
         token.attrSet('data-block-id', `block-${++index}`);
         token.attrSet('data-source-start', String(token.map[0] + 1));
         token.attrSet('data-source-end', String(token.map[1]));
       }
+      if (token.type === 'inline' && sourceMap) {
+        for (const image of token.children.filter(child => child.type === 'image')) {
+          image.attrSet('data-block-id', `image-${++imageIndex}`);
+          image.attrSet('data-source-start', String(sourceMap[0] + 1));
+          image.attrSet('data-source-end', String(sourceMap[1]));
+        }
+      }
     }
   });
-  // Images are text-only: reviewing a private document never fetches remote assets.
-  md.renderer.rules.image = (tokens, index) =>
-    `<span class="image-placeholder">[Image: ${md.utils.escapeHtml(tokens[index].content)}]</span>`;
+  md.renderer.rules.image = (tokens, index, options, env) => {
+    const image = tokens[index];
+    const escape = md.utils.escapeHtml;
+    const id = image.attrGet('data-block-id');
+    let url = '';
+    let error = '';
+    try {
+      const file = imagePath(image.attrGet('src'), env.filePath);
+      env.images.set(id, file);
+      url = `/api/images/${env.hash}/${id}`;
+    } catch (failure) {
+      if (!(failure instanceof ReviewError)) throw failure;
+      error = failure.message;
+    }
+    const attrs = ['data-block-id', 'data-source-start', 'data-source-end']
+      .map(name => ` ${name}="${escape(image.attrGet(name))}"`).join('');
+    return `<span class="image-block" data-view="${url ? 'image' : 'code'}" data-image-url="${url}" role="group" aria-label="Image review">
+<span class="image-view-controls" data-review-ui role="group" aria-label="Image view and zoom">
+<button type="button" class="button button-outline image-icon-button" data-image-view="image" aria-label="Image" title="Image" aria-pressed="${Boolean(url)}" disabled><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="2"/><path d="m3 17 6-6 4 4 3-3 5 5"/></svg></button>
+<button type="button" class="button button-outline image-icon-button" data-image-zoom="out" aria-label="Zoom out" title="Zoom out" disabled><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6M7 10h6"/></svg></button>
+<button type="button" class="button button-outline image-icon-button" data-image-zoom="fit" aria-label="Fit image" title="Fit image" aria-pressed="true" disabled><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/><rect x="7" y="7" width="10" height="10" rx="1"/></svg></button>
+<button type="button" class="button button-outline image-icon-button" data-image-zoom="in" aria-label="Zoom in" title="Zoom in" disabled><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6M7 10h6m-3-3v6"/></svg></button>
+</span>
+<span class="image-controls" data-review-ui role="group" aria-label="Content and comments">
+<button type="button" class="button button-outline image-icon-button" data-image-view="code" aria-label="Code" title="Code" aria-pressed="${!url}"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-14-2 16"/></svg></button>
+<button type="button" class="button button-outline image-icon-button" data-image-comment aria-label="Comment on image" title="Comment on image"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M5 5h14v10H9l-4 4V5Zm3 4h8M8 12h5"/></svg></button>
+</span>
+<span class="image-preview" data-review-ui${url ? '' : ' hidden'}><span role="status">Loading image...</span><img alt="${escape(md.renderer.renderInlineAsText(image.children, options, env))}" hidden></span>
+<code class="image-source"${attrs}${url ? ' hidden' : ''}>${escape(image.meta.source)}</code>
+<span class="image-error" data-review-ui role="alert"${error ? '' : ' hidden'}>${escape(error)}</span>
+</span>`;
+  };
   const fence = md.renderer.rules.fence;
   md.renderer.rules.fence = (tokens, index, options, env, renderer) => {
     const token = tokens[index];
@@ -192,13 +279,14 @@ export async function startReview(file, { targetSession = null, idleMs = 60 * 60
   let finishTimer;
   let idleTimer;
   let cached;
+  let imageFiles = new Map();
 
   const headers = {
     'Cache-Control': 'no-store',
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
     // Mermaid generates SVG styles locally; scripts and network access remain same-origin only.
-    'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src blob:; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   };
   function send(response, status, value, contentType = 'application/json; charset=utf-8') {
     if (response.destroyed || response.writableEnded) return;
@@ -263,11 +351,24 @@ export async function startReview(file, { targetSession = null, idleMs = 60 * 60
         touch();
         if (request.method === 'GET' && url.pathname === '/api/state') {
           const snapshot = await sourceSnapshot(filePath);
-          if (cached?.hash !== snapshot.hash) cached = { hash: snapshot.hash, html: renderer.render(snapshot.text) };
+          if (cached?.hash !== snapshot.hash) {
+            const images = new Map();
+            const html = renderer.render(snapshot.text, { filePath, hash: snapshot.hash, images });
+            cached = { hash: snapshot.hash, html };
+            imageFiles = images;
+          }
           send(response, 200, {
             filePath, title: basename(filePath), targetSession, ...cached, finished,
             latestBatch: latestBatch ? { id: latestBatch.id, status: latestBatch.status, message: latestBatch.message ?? '' } : null,
           });
+        } else if (request.method === 'GET' && /^\/api\/images\/[a-f0-9]{64}\/image-\d+$/.test(url.pathname)) {
+          const [, , , hash, id] = url.pathname.split('/');
+          const file = imageFiles.get(id);
+          requireValue(file && cached?.hash === hash, 'Image is not part of the current review.', 404);
+          const snapshot = await sourceSnapshot(filePath);
+          requireValue(snapshot.hash === hash, 'Document changed. Refresh before loading this image.', 409);
+          const image = await localImage(file, dirname(filePath));
+          send(response, 200, image.bytes, image.type);
         } else if (request.method === 'POST' && url.pathname === '/api/feedback') {
           requireValue(!finished, 'Review is finished.', 410);
           const input = await jsonBody(request);

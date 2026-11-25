@@ -17,8 +17,9 @@ drafts are kept and changed source anchors can be reselected.
 
 ![A saved comment with edit controls and the Apply feedback button](docs/comments-demo.png)
 
-**Review diagrams too.** View Mermaid diagrams with fit and zoom controls,
-switch to their source code, and comment on the whole graph or a code passage.
+**Review images and diagrams too.** View local images and Mermaid diagrams,
+switch to their source code, and comment on the whole image, graph, or a code
+passage. Both have fit and zoom controls.
 
 ![Mermaid workflow with graph and zoom controls on the left and code and comment controls on the right](docs/mermaid-demo.png)
 
@@ -43,5 +44,7 @@ which you can try with your agent.
 ## Privacy
 
 The preview stays local. Keep its private review link to yourself.
+Only local PNG, JPEG, GIF, and WebP images within the document folder are
+displayed (up to 8 MiB each); remote images remain blocked.
 The browser never edits the source directly; changes go through your agent
 after you submit feedback.

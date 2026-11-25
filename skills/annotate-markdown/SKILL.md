@@ -16,7 +16,16 @@ Requires Node 22+. Resolve `<skill-dir>` to this SKILL.md's directory. Startup v
 npm ci --prefix <skill-dir> --ignore-scripts --no-audit --no-fund
 ```
 
-Do not install globally or change settings. Do not publish documents or enable sharing. All assets are served locally; raw HTML is escaped and images are shown as text placeholders. Tables and fenced Mermaid diagrams work; executable HTML and math rendering are intentionally not supported.
+Do not install globally or change settings. Do not publish documents or enable sharing. All assets are served locally; raw HTML is escaped. Tables, local images, and fenced Mermaid diagrams work; executable HTML and math rendering are intentionally not supported.
+
+Local PNG, JPEG, GIF, and WebP images up to 8 MiB are displayed, fitted to the
+available width. Use the left-side **Zoom out**, **Fit image**, and **Zoom in**
+icons to adjust them; manual zoom is kept when switching to **Code** and back.
+Paths must be relative to the document folder and stay within
+it, including after resolving symbolic links. Remote images, absolute paths,
+SVG, and other formats are blocked with an explicit message. Use **Code** to
+review the original image Markdown, or **Comment on image** to comment on the
+whole image. Comments retain its exact Markdown syntax and source-line anchors.
 
 Mermaid blocks default to **Graph** view, fitted to the available width. Use
 the left-side **Zoom out**, **Fit graph**, and **Zoom in** icons to adjust it.

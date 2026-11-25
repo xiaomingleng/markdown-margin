@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
-import { access, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -146,21 +146,102 @@ test('renderer assigns stable, unique source anchors across Markdown block forma
   }
 });
 
-test('renderer disables raw HTML, escapes code, replaces images, and isolates links', () => {
+test('renderer disables raw HTML, escapes code, blocks remote images, and isolates links', () => {
   const html = createRenderer().render([
     '<script>alert("private")</script>', '',
     '<img src="https://example.invalid/raw.png" onerror="alert(1)">', '',
     '![A <remote> & "image"](https://example.invalid/private.png)', '',
     '[external](https://example.invalid/) and [unsafe](javascript:alert(1))', '',
     '```html', '<script>unsafe()</script>', '```',
-  ].join('\n'));
-  assert.doesNotMatch(html, /<(?:script|img)\b/i);
+  ].join('\n'), { filePath: join(tmpdir(), 'review.md'), images: new Map() });
+  assert.doesNotMatch(html, /<script\b|<img\b[^>]*\bsrc=/i);
   assert.match(html, /&lt;script&gt;alert/);
   assert.match(html, /&lt;script&gt;unsafe\(\)&lt;\/script&gt;/);
-  assert.match(html, /<span class="image-placeholder">\[Image: A &lt;remote&gt; &amp; &quot;image&quot;\]<\/span>/);
-  assert.doesNotMatch(html, /private\.png/);
+  assert.match(html, /<img alt="A &lt;remote&gt; &amp; &quot;image&quot;" hidden>/);
+  assert.match(html, /Only relative local images are supported/);
+  assert.match(html, /data-image-url=""/);
   assert.match(html, /href="https:\/\/example\.invalid\/" target="_blank" rel="noopener noreferrer"/);
   assert.doesNotMatch(html, /href="javascript:/i);
+});
+
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=', 'base64');
+
+test('image review preserves inline, repeated, reference, and table image source anchors', () => {
+  const source = 'Before ![same](one.png "title") and ![same][picture] after.\n\n| Image |\n| --- |\n| ![table](two.png) |\n\n[picture]: two.png\n';
+  const images = new Map();
+  const html = createRenderer().render(source, { filePath: join(tmpdir(), 'review.md'), hash: sha256(source), images });
+  assert.equal(images.size, 3);
+  assert.match(html, /data-block-id="image-1" data-source-start="1" data-source-end="1" hidden>!\[same\]\(one.png &quot;title&quot;\)/);
+  assert.match(html, /data-block-id="image-2"[^>]*>!\[same\]\[picture\]/);
+  assert.match(html, /data-block-id="image-3" data-source-start="5" data-source-end="5" hidden>!\[table\]\(two.png\)/);
+  assert.match(html, new RegExp(`data-image-url="/api/images/${sha256(source)}/image-1"`));
+  assert.doesNotMatch(html, /<img\b[^>]*\bsrc=/);
+  const anchors = [...html.matchAll(/data-block-id="([^"]+)"/g)].map(match => match[1]);
+  assert.equal(new Set(anchors).size, anchors.length);
+});
+
+test('local images are authenticated, source-bound, and delivered with exact image comments', async t => {
+  const quote = '![A screenshot](shot%20one.png)';
+  const source = `# Images\n\n${quote}\n`;
+  const review = await fixture(t, { source });
+  await writeFile(join(review.directory, 'shot one.png'), PNG);
+  const state = await review.api('/api/state');
+  const path = `/api/images/${state.hash}/image-1`;
+  const response = await review.request(path);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'image/png');
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), PNG);
+  await review.api(path, { headers: { Authorization: null }, status: 401 });
+  await review.api(`/api/images/${state.hash}/image-2`, { status: 404 });
+  await review.api('/shot%20one.png', { status: 404 });
+  const feedback = review.feedback('image-batch');
+  feedback.comments[0].quote = quote;
+  feedback.comments[0].blocks = [{ id: 'image-1', startLine: 3, endLine: 3 }];
+  await review.api('/api/feedback', { body: feedback });
+  assert.deepEqual((await review.api('/api/wait?timeout=0.05')).comments, feedback.comments);
+  await writeFile(review.file, `${source}\nChanged source.\n`);
+  await review.api(path, { status: 409, error: /Document changed/ });
+  await review.api('/api/state');
+  await review.api(path, { status: 404 });
+});
+
+test('image review blocks remote, absolute, and escaped paths without asset requests', () => {
+  const images = new Map();
+  const html = createRenderer().render([
+    '![remote](https://example.invalid/private.png)',
+    '![network](//example.invalid/private.png)',
+    '![absolute](/private.png)',
+    '![drive](C:/private.png)',
+    '![escape](../private.png)',
+    '![encoded](%2e%2e%2fprivate.png)',
+    '![UNC](%5c%5cserver%5cprivate.png)',
+  ].join('\n\n'), { filePath: join(tmpdir(), 'review.md'), images });
+  assert.equal(images.size, 0);
+  assert.equal((html.match(/data-image-url=""/g) || []).length, 7);
+  assert.match(html, /outside the document folder/);
+  assert.doesNotMatch(html, /<img\b[^>]*\bsrc=/);
+});
+
+test('missing, unsupported, and oversized images return explicit errors', async t => {
+  const source = '![missing](missing.png)\n\n![unsafe](unsafe.png)\n\n![large](large.png)\n';
+  const review = await fixture(t, { source });
+  await writeFile(join(review.directory, 'unsafe.png'), '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+  await writeFile(join(review.directory, 'large.png'), Buffer.alloc(8 * 1024 * 1024 + 1));
+  const state = await review.api('/api/state');
+  const path = `/api/images/${state.hash}`;
+  await review.api(`${path}/image-1`, { status: 404, error: /not found/ });
+  await review.api(`${path}/image-2`, { status: 415, error: /SVG and other formats are blocked/ });
+  await review.api(`${path}/image-3`, { status: 413, error: /under 8 MiB/ });
+});
+
+test('local image links cannot follow directory symlinks outside the document folder', async t => {
+  const outside = await mkdtemp(join(tmpdir(), 'review-image-outside-'));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  await writeFile(join(outside, 'private.png'), PNG);
+  const review = await fixture(t, { source: '![linked](linked/private.png)\n' });
+  await symlink(outside, join(review.directory, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+  const state = await review.api('/api/state');
+  await review.api(`/api/images/${state.hash}/image-1`, { status: 403, error: /outside the document folder/ });
 });
 
 test('Mermaid fences keep exact source and unique anchors alongside graph controls', () => {
@@ -494,11 +575,15 @@ test('fixed assets have restrictive headers and arbitrary files cannot be read',
     assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
     assert.match(response.headers.get('content-security-policy'), /default-src 'none'/);
     assert.match(response.headers.get('content-security-policy'), /script-src 'self'/);
-    assert.match(response.headers.get('content-security-policy'), /img-src 'none'/);
+    assert.match(response.headers.get('content-security-policy'), /img-src blob:;/);
     assert.match(response.headers.get('content-security-policy'), /frame-ancestors 'none'/);
     const body = await response.text();
     assert.ok(body.length > 0);
     assert.ok(!body.includes(review.token));
+    if (path === '/') {
+      assert.match(body, /<meta http-equiv="Content-Security-Policy"[^>]*img-src blob:;/);
+      assert.doesNotMatch(body, /img-src 'none'/);
+    }
   }
   for (const path of ['/session.json', '/review.md', '/review.mjs', '/assets/review.html', '/etc/passwd', '/%2e%2e%2freview.mjs', '/review.js/extra']) {
     await review.api(path, { status: 404, error: /Not found/ });
