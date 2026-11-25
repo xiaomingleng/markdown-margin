@@ -16,6 +16,26 @@ For Chinese instructions, use
 includes its own scripts, assets, and dependencies and can be installed alone.
 The browser interface remains in English.
 
+### Mermaid diagrams
+
+Fenced `mermaid` blocks render locally as diagrams. Compact icon buttons provide
+**Graph** and zoom controls on the left, with **Code** and **Comment on diagram**
+on the right; hover for titles. Graph and Code switch between the diagram and
+its unchanged source.
+Graphs initially fit the available width. **Zoom out**, **Fit graph**, and
+**Zoom in** icons on the left adjust the view; content and comment controls
+stay on the right. Zoomed graphs scroll horizontally when needed. Fit mode
+adapts to window resizing; manual zoom is kept when switching Graph/Code views.
+Use **Comment on diagram** for whole-diagram feedback, or select source text
+in Code view for a more specific comment. Both use the original fenced block's
+source-line anchors; generated SVG labels are not replacement offsets.
+
+Invalid diagrams show a rendering error and fall back to Code view, where
+comments remain available. Mermaid is a pinned skill-local dependency, not
+a CDN service. Rendering uses strict mode with HTML labels and diagram actions
+disabled. Inline SVG styles are allowed by the preview's content security
+policy; scripts remain local and external images and fonts remain blocked.
+
 ### Host compatibility
 
 The skills use the shared [Agent Skills](https://github.com/agentskills/agentskills)

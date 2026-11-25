@@ -9,6 +9,7 @@
     "test": "node --test scripts/review.test.mjs"
   },
   "dependencies": {
-    "markdown-it": "14.3.2"
+    "markdown-it": "14.3.2",
+    "mermaid": "11.12.2"
   }
 }

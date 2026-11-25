@@ -163,6 +163,52 @@ test('renderer disables raw HTML, escapes code, replaces images, and isolates li
   assert.doesNotMatch(html, /href="javascript:/i);
 });
 
+test('Mermaid fences keep exact source and unique anchors alongside graph controls', () => {
+  const source = '# Diagrams\n\n```mermaid\nflowchart LR\n  A["<unsafe> & 世界"] --> B\n```\n\n```js\nmermaid is just text here\n```\n\n```mermaid\nsequenceDiagram\n  Alice->>Bob: Hello\n```\n';
+  const html = createRenderer().render(source);
+  assert.equal((html.match(/class="mermaid-block"/g) || []).length, 2);
+  assert.equal((html.match(/data-diagram-comment/g) || []).length, 2);
+  assert.match(html, /<pre data-block-id="block-2" data-source-start="3" data-source-end="6" hidden><code class="language-mermaid">flowchart LR\n  A\[&quot;&lt;unsafe&gt; &amp; 世界&quot;\] --&gt; B\n<\/code><\/pre>/);
+  assert.match(html, /<pre data-block-id="block-3"[^>]*><code class="language-js">mermaid is just text here/);
+  const anchors = [...html.matchAll(/data-block-id="([^"]+)"/g)].map(match => match[1]);
+  assert.equal(new Set(anchors).size, anchors.length);
+  assert.match(html, /id="diagram-block-2"/);
+  assert.match(html, /id="diagram-block-4"/);
+  assert.doesNotMatch(html, /<unsafe>/);
+});
+
+test('Mermaid modules are served locally without exposing other dependency files', async t => {
+  const review = await fixture(t);
+  const response = await review.request('/vendor/mermaid/mermaid.esm.min.mjs', { headers: { Authorization: null } });
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type'), /text\/javascript/);
+  const module = await response.text();
+  const chunk = /["']\.\/(chunks\/mermaid\.esm\.min\/[A-Za-z0-9_-]+\.mjs)["']/.exec(module);
+  assert.ok(chunk, 'The local entry point must reference its bundled chunks');
+  const chunkResponse = await review.request(`/vendor/mermaid/${chunk[1]}`);
+  assert.equal(chunkResponse.status, 200);
+  assert.ok((await chunkResponse.text()).length > 0);
+  for (const path of ['/vendor/mermaid/package.json', '/vendor/mermaid/../../package.json',
+    '/vendor/mermaid/%2e%2e%2fpackage.json', '/vendor/mermaid/chunks/mermaid.core/chunk.mjs',
+    '/vendor/mermaid/mermaid.esm.min.mjs.map']) {
+    await review.api(path, { status: 404, error: /Not found/ });
+  }
+});
+
+test('diagram feedback retains raw Mermaid source and fenced line hints through delivery', async t => {
+  const code = 'flowchart LR\n  A["世界"] --> B\n';
+  const source = `# Diagram\n\n\`\`\`mermaid\n${code}\`\`\`\n`;
+  const review = await fixture(t, { source });
+  const feedback = review.feedback('diagram-batch');
+  feedback.comments[0].quote = code;
+  feedback.comments[0].blocks = [{ id: 'block-2', startLine: 3, endLine: 6 }];
+  feedback.comments[0].comment = 'Add an explicit no-go branch.';
+  await review.api('/api/feedback', { body: feedback });
+  const delivered = await review.api('/api/wait?timeout=0.05');
+  assert.deepEqual(delivered.comments, feedback.comments);
+  assert.equal(await readFile(review.file, 'utf8'), source);
+});
+
 test('session metadata and initial state describe the disposable source', async t => {
   const review = await fixture(t, { targetSession: 'editing-session' });
   assert.match(review.origin, /^http:\/\/127\.0\.0\.1:\d+$/);

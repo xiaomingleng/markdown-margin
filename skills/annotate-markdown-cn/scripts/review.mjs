@@ -8,10 +8,12 @@ import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import MarkdownIt from 'markdown-it';
 import rendererPackage from 'markdown-it/package.json' with { type: 'json' };
+import mermaidPackage from 'mermaid/package.json' with { type: 'json' };
 import skillPackage from '../package.json' with { type: 'json' };
 
 const SCRIPT = fileURLToPath(import.meta.url);
 const ASSETS = resolve(dirname(SCRIPT), '../assets');
+const MERMAID_DIST = resolve(dirname(fileURLToPath(import.meta.resolve('mermaid/package.json'))), 'dist');
 const MAX_SOURCE = 2 * 1024 * 1024;
 const MAX_BODY = 256 * 1024;
 const ACTIVE = new Set(['pending', 'delivered']);
@@ -85,6 +87,24 @@ export function createRenderer() {
     const token = tokens[index];
     const attrs = token.attrs;
     const anchorAttrs = renderer.renderAttrs(token);
+    if (token.info.trim().split(/\s+/)[0] === 'mermaid') {
+      const blockId = token.attrGet('data-block-id');
+      return `<section class="mermaid-block" data-view="graph" aria-label="Mermaid diagram">
+<div class="mermaid-zoom-controls" data-review-ui role="group" aria-label="Graph view and zoom">
+<button type="button" class="button button-outline mermaid-icon-button" data-diagram-view="graph" aria-label="Graph" title="Graph" aria-pressed="true" disabled><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="5" rx="1"/><rect x="2" y="16" width="8" height="5" rx="1"/><rect x="14" y="16" width="8" height="5" rx="1"/><path d="M12 8v4M6 16v-4h12v4"/></svg></button>
+<button type="button" class="button button-outline mermaid-icon-button" data-diagram-zoom="out" aria-label="Zoom out" title="Zoom out" disabled><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6M7 10h6"/></svg></button>
+<button type="button" class="button button-outline mermaid-icon-button" data-diagram-zoom="fit" aria-label="Fit graph" title="Fit graph" aria-pressed="true" disabled><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/><rect x="7" y="7" width="10" height="10" rx="1"/></svg></button>
+<button type="button" class="button button-outline mermaid-icon-button" data-diagram-zoom="in" aria-label="Zoom in" title="Zoom in" disabled><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6M7 10h6m-3-3v6"/></svg></button>
+</div>
+<div class="mermaid-controls" data-review-ui role="group" aria-label="Content and comments">
+<button type="button" class="button button-outline mermaid-icon-button" data-diagram-view="code" aria-label="Code" title="Code" aria-pressed="false"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-14-2 16"/></svg></button>
+<button type="button" class="button button-outline mermaid-icon-button" data-diagram-comment aria-label="Comment on diagram" title="Comment on diagram"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M5 5h14v10H9l-4 4V5Zm3 4h8M8 12h5"/></svg></button>
+</div>
+<div class="mermaid-preview" id="diagram-${blockId}" data-review-ui aria-label="Rendered Mermaid diagram"><p role="status">Rendering diagram...</p></div>
+<pre${anchorAttrs} hidden><code class="language-mermaid">${md.utils.escapeHtml(token.content)}</code></pre>
+<p class="mermaid-error" data-review-ui role="alert" hidden></p>
+</section>\n`;
+    }
     // markdown-it normally attaches these to <code>; keep one anchor on <pre>.
     token.attrs = null;
     try { return fence(tokens, index, options, env, renderer).replace('<pre>', `<pre${anchorAttrs}>`); }
@@ -177,7 +197,8 @@ export async function startReview(file, { targetSession = null, idleMs = 60 * 60
     'Cache-Control': 'no-store',
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
-    'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    // Mermaid generates SVG styles locally; scripts and network access remain same-origin only.
+    'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   };
   function send(response, status, value, contentType = 'application/json; charset=utf-8') {
     if (response.destroyed || response.writableEnded) return;
@@ -310,6 +331,11 @@ export async function startReview(file, { targetSession = null, idleMs = 60 * 60
         } else send(response, 404, { error: 'Not found.' });
       } else {
         requireValue(request.method === 'GET', 'Not found.', 404);
+        const mermaidAsset = /^\/vendor\/mermaid\/(mermaid\.esm\.min\.mjs|chunks\/mermaid\.esm\.min\/[A-Za-z0-9_-]+\.mjs)$/.exec(url.pathname);
+        if (mermaidAsset) {
+          send(response, 200, await readFile(join(MERMAID_DIST, mermaidAsset[1]), 'utf8'), 'text/javascript; charset=utf-8');
+          return;
+        }
         const assets = { '/': ['review.html', 'text/html; charset=utf-8'], '/review.js': ['review.js', 'text/javascript; charset=utf-8'], '/review.css': ['review.css', 'text/css; charset=utf-8'] };
         const asset = Object.hasOwn(assets, url.pathname) ? assets[url.pathname] : null;
         requireValue(asset, 'Not found.', 404);
@@ -403,6 +429,8 @@ export async function main(args = process.argv.slice(2)) {
   if (['start', 'serve'].includes(command)) {
     requireValue(rendererPackage.version === skillPackage.dependencies['markdown-it'],
       'Renderer does not match the pinned version. Run npm ci --prefix <skill-dir> --ignore-scripts --no-audit --no-fund before starting a review.');
+    requireValue(mermaidPackage.version === skillPackage.dependencies.mermaid,
+      'Mermaid does not match the pinned version. Run npm ci --prefix <skill-dir> --ignore-scripts --no-audit --no-fund before starting a review.');
   }
   const input = options(rest);
   let result;

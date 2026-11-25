@@ -36,6 +36,9 @@
   let latestBatch = null;
   let lastSubmission = null;
   let renderedSubmission = null;
+  let mermaidPromise = null;
+  let diagramSequence = 0;
+  const diagramZoom = new WeakMap();
 
   class ApiError extends Error {
     constructor(message, status = 0) {
@@ -166,12 +169,12 @@
     $("target-session").textContent = next.targetSession || "Current session";
     document.title = `${next.title || "Markdown"} · Review`;
     if (firstRender || sourceChanged) {
-      // The sole HTML insertion: supplied by the local server's trusted
-      // markdown-it renderer with raw HTML disabled. All other content is text.
+      // Document HTML comes from the local renderer with raw HTML disabled.
       article.innerHTML = next.html;
       article.setAttribute("aria-busy", "false");
       protectDocumentLinks();
       populateKeyboardPassages();
+      renderMermaidDiagrams();
       selectionCandidate = null;
       positionSelectionOffer();
       if (sourceChanged) {
@@ -206,6 +209,146 @@
       } catch {
         link.removeAttribute("href");
       }
+    }
+  }
+
+  function loadMermaid() {
+    if (!mermaidPromise) {
+      mermaidPromise = import("/vendor/mermaid/mermaid.esm.min.mjs").then(({ default: mermaid }) => {
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: "strict",
+          suppressErrorRendering: true,
+          htmlLabels: false,
+          flowchart: { htmlLabels: false },
+          theme: "neutral",
+          fontFamily: "system-ui, sans-serif",
+          // Document directives must not override the preview's rendering policy.
+          secure: [...new Set([...Object.keys(mermaid.mermaidAPI.getConfig()), "secure", "suppressErrorRendering"])],
+        });
+        return mermaid;
+      });
+    }
+    return mermaidPromise;
+  }
+
+  function setDiagramView(block, view) {
+    block.dataset.view = view;
+    block.querySelector("pre").hidden = view !== "code";
+    block.querySelector(".mermaid-preview").hidden = view !== "graph";
+    for (const button of block.querySelectorAll("[data-diagram-view]")) {
+      button.setAttribute("aria-pressed", String(button.dataset.diagramView === view));
+    }
+    if (view === "graph" && diagramZoom.get(block)?.fitted) fitDiagram(block);
+    clearSelectionOffer();
+    if (composer) positionComposer();
+  }
+
+  function diagramFitScale(block, width) {
+    const preview = block.querySelector(".mermaid-preview");
+    const styles = window.getComputedStyle(preview);
+    const available = preview.clientWidth - parseFloat(styles.paddingLeft) - parseFloat(styles.paddingRight);
+    return Math.min(1, Math.max(1, available) / width);
+  }
+
+  function setDiagramScale(block, scale, fitted) {
+    const state = diagramZoom.get(block);
+    if (!state || block.dataset.view !== "graph") return;
+    const minimum = Math.min(0.1, diagramFitScale(block, state.width));
+    state.scale = Math.max(minimum, Math.min(3, scale));
+    state.fitted = fitted;
+    block.querySelector(".mermaid-preview svg").setAttribute("width", String(state.width * state.scale));
+    block.querySelector('[data-diagram-zoom="out"]').disabled = state.scale <= minimum + 0.000001;
+    block.querySelector('[data-diagram-zoom="in"]').disabled = state.scale >= 3 - 0.000001;
+    const fitButton = block.querySelector('[data-diagram-zoom="fit"]');
+    fitButton.disabled = false;
+    fitButton.setAttribute("aria-pressed", String(fitted));
+    if (fitted) block.querySelector(".mermaid-preview").scrollLeft = 0;
+    clearSelectionOffer();
+    if (composer) positionComposer();
+  }
+
+  function fitDiagram(block) {
+    const state = diagramZoom.get(block);
+    if (state) setDiagramScale(block, diagramFitScale(block, state.width), true);
+  }
+
+  function zoomDiagram(block, action) {
+    const state = diagramZoom.get(block);
+    if (!state) return;
+    if (action === "fit") fitDiagram(block);
+    else setDiagramScale(block, state.scale * (action === "in" ? 1.25 : 0.8), false);
+    announce(`Diagram zoom ${Math.round(state.scale * 100)} percent.`);
+  }
+
+  function commentOnDiagram(block) {
+    if (editingLocked()) return;
+    const range = document.createRange();
+    range.selectNodeContents(block.querySelector("pre"));
+    const captured = captureRange(range);
+    if (captured?.error) { notice(captured.error); return; }
+    if (!captured) { notice("This diagram has no source text to comment on."); return; }
+    const rect = block.getBoundingClientRect();
+    captured.placement = {
+      top: rect.top + window.scrollY,
+      right: rect.right + window.scrollX,
+      bottom: rect.bottom + window.scrollY,
+    };
+    openSelection(captured);
+  }
+
+  function renderMermaidDiagrams() {
+    for (const block of article.querySelectorAll(".mermaid-block")) {
+      for (const button of block.querySelectorAll("[data-diagram-view]")) {
+        button.addEventListener("click", () => setDiagramView(block, button.dataset.diagramView));
+      }
+      for (const button of block.querySelectorAll("[data-diagram-zoom]")) {
+        button.addEventListener("click", () => zoomDiagram(block, button.dataset.diagramZoom));
+      }
+      block.querySelector("[data-diagram-comment]").addEventListener("click", () => commentOnDiagram(block));
+      void renderMermaidDiagram(block);
+    }
+  }
+
+  async function renderMermaidDiagram(block) {
+    let mount = null;
+    try {
+      const mermaid = await loadMermaid();
+      if (!block.isConnected) return;
+      mount = makeElement("div", "mermaid-render-target");
+      mount.setAttribute("aria-hidden", "true");
+      document.body.append(mount);
+      const { svg } = await mermaid.render(`review-diagram-${++diagramSequence}`, block.querySelector("code").textContent, mount);
+      if (!block.isConnected) return;
+      // Mermaid's strict renderer sanitizes the SVG. Do not bind diagram actions.
+      const parsed = new DOMParser().parseFromString(svg, "image/svg+xml");
+      if (parsed.querySelector("parsererror") || parsed.documentElement.localName !== "svg") {
+        throw new Error("Mermaid returned an invalid SVG.");
+      }
+      const diagram = document.importNode(parsed.documentElement, true);
+      if (diagram.viewBox.baseVal.width > 0) {
+        diagram.setAttribute("width", String(diagram.viewBox.baseVal.width));
+        diagram.removeAttribute("height");
+        diagram.removeAttribute("style");
+      }
+      for (const link of diagram.querySelectorAll("a")) {
+        link.removeAttribute("href");
+        link.removeAttributeNS("http://www.w3.org/1999/xlink", "href");
+      }
+      block.querySelector(".mermaid-preview").replaceChildren(diagram);
+      if (diagram.viewBox.baseVal.width > 0) {
+        diagramZoom.set(block, { width: diagram.viewBox.baseVal.width, scale: 1, fitted: true });
+        fitDiagram(block);
+      }
+      block.querySelector('[data-diagram-view="graph"]').disabled = false;
+    } catch (error) {
+      if (!block.isConnected) return;
+      const message = block.querySelector(".mermaid-error");
+      message.textContent = `Diagram could not be rendered: ${error.message || "Unknown rendering error"}. Code remains available for review.`;
+      message.hidden = false;
+      setDiagramView(block, "code");
+    } finally {
+      mount?.remove();
     }
   }
 
@@ -261,6 +404,8 @@
     const id = $("keyboard-passage").value;
     const block = [...article.querySelectorAll(BLOCK_SELECTOR)].find((item) => item.dataset.blockId === id);
     if (!block) return;
+    const diagram = block.closest(".mermaid-block");
+    if (diagram) setDiagramView(diagram, "code");
     const range = document.createRange();
     range.selectNodeContents(block);
     const selection = window.getSelection();
@@ -288,7 +433,11 @@
 
   function captureRange(range) {
     if (!current || range.collapsed || !article.contains(range.startContainer) || !article.contains(range.endContainer)) return null;
-    const quote = range.toString();
+    const inDiagramUi = (node) => (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement)?.closest("[data-review-ui]");
+    if (inDiagramUi(range.startContainer) || inDiagramUi(range.endContainer)) {
+      return { error: "Use Comment on diagram for the whole graph, or switch to Code to select a specific passage." };
+    }
+    const quote = sourceRangeText(range);
     if (!quote.trim()) return null;
     if (quote.length > MAX_QUOTE) return { error: "Select a shorter passage (up to 16,000 characters)." };
 
@@ -301,7 +450,7 @@
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let node = root.nodeType === Node.TEXT_NODE ? root : walker.nextNode();
     while (node) {
-      if (node.textContent.length) {
+      if (node.textContent.length && !inDiagramUi(node)) {
         const point = document.createRange();
         point.setStart(node, 0);
         point.collapse(true);
@@ -346,11 +495,17 @@
       } : null,
       anchor: {
         quote,
-        prefix: Array.from(before.toString()).slice(-160).join(""),
-        suffix: Array.from(after.toString()).slice(0, 160).join(""),
+        prefix: Array.from(sourceRangeText(before)).slice(-160).join(""),
+        suffix: Array.from(sourceRangeText(after)).slice(0, 160).join(""),
         blocks: [...blocks.values()],
       },
     };
+  }
+
+  function sourceRangeText(range) {
+    const content = range.cloneContents();
+    for (const element of content.querySelectorAll("[data-review-ui]")) element.remove();
+    return content.textContent;
   }
 
   const styleRules = new Map();
@@ -633,6 +788,8 @@
       notice("That source anchor is no longer visible. Reselect the passage to update it.");
       return;
     }
+    const diagram = block.closest(".mermaid-block");
+    if (diagram) setDiagramView(diagram, "code");
     block.classList.add("anchor-highlight");
     block.setAttribute("tabindex", "-1");
     block.scrollIntoView({ block: "center" });
@@ -746,6 +903,7 @@
     $("comment-selection").disabled = selectionDisabled;
     $("delete-selection").disabled = selectionDisabled;
     $("refine-selection").disabled = selectionDisabled;
+    for (const button of article.querySelectorAll("[data-diagram-comment]")) button.disabled = locked;
     positionSelectionOffer();
     $("comment-text").disabled = locked && !finished;
     $("comment-text").readOnly = finished;
@@ -948,7 +1106,12 @@
     }, 80);
   });
   window.addEventListener("scroll", schedulePlacement, { passive: true });
-  window.addEventListener("resize", schedulePlacement);
+  window.addEventListener("resize", () => {
+    for (const block of article.querySelectorAll('.mermaid-block[data-view="graph"]')) {
+      if (diagramZoom.get(block)?.fitted) fitDiagram(block);
+    }
+    schedulePlacement();
+  });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape" || editingLocked()) return;
     if ($("keyboard-picker").open) {

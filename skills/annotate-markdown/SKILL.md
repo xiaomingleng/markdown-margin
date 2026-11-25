@@ -16,7 +16,16 @@ Requires Node 22+. Resolve `<skill-dir>` to this SKILL.md's directory. Startup v
 npm ci --prefix <skill-dir> --ignore-scripts --no-audit --no-fund
 ```
 
-Do not install globally or change settings. Do not publish documents or enable sharing. All assets are served locally; raw HTML is escaped and images are shown as text placeholders. Tables work; executable HTML, embedded diagrams, and math rendering are intentionally not supported.
+Do not install globally or change settings. Do not publish documents or enable sharing. All assets are served locally; raw HTML is escaped and images are shown as text placeholders. Tables and fenced Mermaid diagrams work; executable HTML and math rendering are intentionally not supported.
+
+Mermaid blocks default to **Graph** view, fitted to the available width. Use
+the left-side **Zoom out**, **Fit graph**, and **Zoom in** icons to adjust it.
+Use **Code** to inspect the unchanged
+graph source and select text for comments, or **Comment on diagram** to comment
+on the whole source block. Comments retain its source-line anchors, not generated
+SVG offsets. Invalid diagrams show an error and fall back to Code view.
+Mermaid uses a pinned local dependency and strict rendering without HTML labels
+or diagram actions. Inline SVG styles are permitted; remote assets remain blocked.
 
 ## Start a review
 
