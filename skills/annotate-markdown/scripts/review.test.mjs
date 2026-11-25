@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
-import { access, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { createRenderer, startReview } from './review.mjs';
+import { createRenderer, main, startReview } from './review.mjs';
 
 test('CLI blocks startup with an outdated renderer before reading a document', async () => {
   const installed = JSON.parse(await readFile(new URL('../node_modules/markdown-it/package.json', import.meta.url)));
@@ -218,7 +218,7 @@ test('image review blocks remote, absolute, and escaped paths without asset requ
   ].join('\n\n'), { filePath: join(tmpdir(), 'review.md'), images });
   assert.equal(images.size, 0);
   assert.equal((html.match(/data-image-url=""/g) || []).length, 7);
-  assert.match(html, /outside the document folder/);
+  assert.match(html, /outside the allowed image folder/);
   assert.doesNotMatch(html, /<img\b[^>]*\bsrc=/);
 });
 
@@ -241,7 +241,45 @@ test('local image links cannot follow directory symlinks outside the document fo
   const review = await fixture(t, { source: '![linked](linked/private.png)\n' });
   await symlink(outside, join(review.directory, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
   const state = await review.api('/api/state');
-  await review.api(`/api/images/${state.hash}/image-1`, { status: 403, error: /outside the document folder/ });
+  await review.api(`/api/images/${state.hash}/image-1`, { status: 403, error: /outside the allowed image folder/ });
+});
+
+test('an explicit image root allows parent-relative images but blocks traversal and symlink escapes', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'review-image-root-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const project = join(root, 'project');
+  const document = join(project, 'docs', 'review.md');
+  await mkdir(dirname(document), { recursive: true });
+  await writeFile(join(project, 'shared image.png'), PNG);
+  await writeFile(join(root, 'private.png'), PNG);
+  await writeFile(document, '![shared](../shared%20image.png)\n\n![escape](../../private.png)\n\n![linked](../linked/private.png)\n');
+  await symlink(root, join(project, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+  const review = await startReview(document, { imageRoot: project });
+  t.after(() => review.close());
+  const headers = { Authorization: `Bearer ${review.token}` };
+  const state = await (await fetch(`${review.origin}/api/state`, { headers })).json();
+  assert.match(state.html, /outside the allowed image folder/);
+  const response = await fetch(`${review.origin}/api/images/${state.hash}/image-1`, { headers });
+  assert.equal(response.status, 200);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), PNG);
+  const blocked = await fetch(`${review.origin}/api/images/${state.hash}/image-2`, { headers });
+  assert.equal(blocked.status, 404);
+  await blocked.text();
+  const linked = await fetch(`${review.origin}/api/images/${state.hash}/image-3`, { headers });
+  assert.equal(linked.status, 403);
+  assert.match((await linked.json()).error, /outside the allowed image folder/);
+});
+
+test('image roots reject missing paths, files, and directories that do not contain the document', async t => {
+  const review = await fixture(t);
+  await assert.rejects(startReview(review.file, { imageRoot: join(review.directory, 'missing') }), { code: 'ENOENT' });
+  await assert.rejects(startReview(review.file, { imageRoot: review.file }), /must be a directory/);
+  const unrelated = join(review.directory, 'unrelated');
+  await mkdir(unrelated);
+  await assert.rejects(startReview(review.file, { imageRoot: unrelated }), /must contain the reviewed document/);
+  await assert.rejects(main(['serve', review.file, '--image-root', unrelated]), /must contain the reviewed document/);
+  await symlink(review.directory, join(unrelated, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(startReview(join(unrelated, 'linked', 'review.md'), { imageRoot: unrelated }), /must contain the reviewed document/);
 });
 
 test('Mermaid fences keep exact source and unique anchors alongside graph controls', () => {

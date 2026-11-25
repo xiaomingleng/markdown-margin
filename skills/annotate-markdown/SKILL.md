@@ -22,7 +22,12 @@ Local PNG, JPEG, GIF, and WebP images up to 8 MiB are displayed, fitted to the
 available width. Use the left-side **Zoom out**, **Fit image**, and **Zoom in**
 icons to adjust them; manual zoom is kept when switching to **Code** and back.
 Paths must be relative to the document folder and stay within
-it, including after resolving symbolic links. Remote images, absolute paths,
+it by default, including after resolving symbolic links. For shared images such
+as `../images/diagram.png`, use `--image-root` only with a directory explicitly
+allowed by the user. The root must contain the document; choose the narrowest
+appropriate project folder, never infer permission for the whole filesystem or
+home directory. Paths and resolved symbolic links must stay inside that root.
+Remote images, absolute paths,
 SVG, and other formats are blocked with an explicit message. Use **Code** to
 review the original image Markdown, or **Comment on image** to comment on the
 whole image. Comments retain its exact Markdown syntax and source-line anchors.
@@ -45,6 +50,7 @@ or diagram actions. Inline SVG styles are permitted; remote assets remain blocke
 ```bash
 node <skill-dir>/scripts/review.mjs start /absolute/path/document.md
 node <skill-dir>/scripts/review.mjs start /absolute/path/document.md --target "exact-session-name"
+node <skill-dir>/scripts/review.mjs start /absolute/path/project/docs/document.md --image-root /absolute/path/project
 ```
 
 `start` detaches only the local preview server. It writes a private temporary session descriptor, not source files. `serve` is the foreground alternative. The localhost URL contains a capability token in its fragment; treat that link and the descriptor as private. Never post them to another service.

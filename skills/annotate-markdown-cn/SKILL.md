@@ -20,7 +20,7 @@ npm ci --prefix <skill-dir> --ignore-scripts --no-audit --no-fund
 
 不要全局安装或更改设置。不要发布文档或启用共享。所有资源均在本地提供；原始 HTML 会被转义。支持表格、本地图片和 Mermaid 代码围栏图表；有意不支持可执行 HTML 和数学公式渲染。
 
-支持显示不超过 8 MiB 的本地 PNG、JPEG、GIF 和 WebP 图片，并自动适配可用宽度。左侧的 **Zoom out**、**Fit image** 和 **Zoom in** 图标可缩小、恢复适配和放大图片；切换到 **Code** 再返回时保留手动缩放。路径必须相对于文档所在文件夹，且解析符号链接后仍位于该文件夹内。远程图片、绝对路径、SVG 和其他格式会被阻止并显示明确提示。点击 **Code** 可查看原始图片 Markdown，或点击 **Comment on image** 对整张图片批注。批注保留原始 Markdown 语法和源文件行号锚点。
+支持显示不超过 8 MiB 的本地 PNG、JPEG、GIF 和 WebP 图片，并自动适配可用宽度。左侧的 **Zoom out**、**Fit image** 和 **Zoom in** 图标可缩小、恢复适配和放大图片；切换到 **Code** 再返回时保留手动缩放。路径必须相对于文档所在文件夹，默认在解析符号链接后仍须位于该文件夹内。对于 `../images/diagram.png` 等共享图片，仅可通过 `--image-root` 使用用户明确允许的目录。该目录必须包含文档；选择适当且范围最小的项目文件夹，不得自行推断用户允许访问整个文件系统或主目录。图片路径及解析后的符号链接必须位于允许的根目录内。远程图片、绝对路径、SVG 和其他格式会被阻止并显示明确提示。点击 **Code** 可查看原始图片 Markdown，或点击 **Comment on image** 对整张图片批注。批注保留原始 Markdown 语法和源文件行号锚点。
 
 Mermaid 图表默认使用 **Graph**（图形）视图，并自动适配可用宽度。左侧的 **Zoom out**、**Fit graph** 和 **Zoom in** 图标可缩小、恢复适配和放大图表；右侧保留内容及批注操作。点击 **Code**（代码）可查看未修改的图表源代码并选中文本批注，也可点击 **Comment on diagram** 对整段图表源代码批注。批注保留代码围栏的源文件行号锚点，不使用生成 SVG 的偏移量。无效图表会显示错误并回退到代码视图。
 Mermaid 使用固定版本的本地依赖和严格渲染模式，禁用 HTML 标签及图表交互操作。允许内联 SVG 样式；远程资源仍被阻止。
@@ -34,6 +34,7 @@ Mermaid 使用固定版本的本地依赖和严格渲染模式，禁用 HTML 标
 ```bash
 node <skill-dir>/scripts/review.mjs start /absolute/path/document.md
 node <skill-dir>/scripts/review.mjs start /absolute/path/document.md --target "exact-session-name"
+node <skill-dir>/scripts/review.mjs start /absolute/path/project/docs/document.md --image-root /absolute/path/project
 ```
 
 `start` 只将本地预览服务器转入后台；它写入的是私有临时会话描述文件，而不是源文件。`serve` 是前台运行的替代方式。本地主机 URL 的片段中含有能力令牌；该链接和会话描述文件均须保密，绝不能发送到其他服务。

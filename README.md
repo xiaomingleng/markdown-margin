@@ -45,6 +45,11 @@ which you can try with your agent.
 
 The preview stays local. Keep its private review link to yourself.
 Only local PNG, JPEG, GIF, and WebP images within the document folder are
-displayed (up to 8 MiB each); remote images remain blocked.
+displayed by default (up to 8 MiB each). For shared project images such as
+`../images/diagram.png`, ask your agent to start the review with
+`--image-root /absolute/path/project`. This explicitly allowed directory must
+contain the document; image paths stay relative to the document and must remain
+inside the allowed root, including after resolving symbolic links.
+Remote images and absolute image paths remain blocked.
 The browser never edits the source directly; changes go through your agent
 after you submit feedback.

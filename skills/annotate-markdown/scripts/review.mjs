@@ -74,7 +74,7 @@ function withinDirectory(directory, file) {
   return path !== '' && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path);
 }
 
-function imagePath(src, filePath) {
+function imagePath(src, filePath, imageRoot) {
   requireValue(filePath, 'Local images require a review session.');
   let path;
   try { path = decodeURIComponent(src); }
@@ -83,7 +83,7 @@ function imagePath(src, filePath) {
     'Only relative local images are supported; remote and absolute paths are blocked.');
   const directory = dirname(filePath);
   const file = resolve(directory, path);
-  requireValue(withinDirectory(directory, file), 'Images outside the document folder are blocked.', 403);
+  requireValue(withinDirectory(imageRoot ?? directory, file), 'Images outside the allowed image folder are blocked.', 403);
   return file;
 }
 
@@ -94,7 +94,7 @@ async function localImage(file, directory) {
     if (['ENOENT', 'ENOTDIR'].includes(error.code)) throw new ReviewError(404, 'The local image was not found.');
     throw error;
   }
-  requireValue(withinDirectory(directory, canonical), 'Images outside the document folder are blocked.', 403);
+  requireValue(withinDirectory(directory, canonical), 'Images outside the allowed image folder are blocked.', 403);
   const info = await stat(canonical);
   requireValue(info.isFile() && info.size <= MAX_IMAGE, 'Images must be regular files under 8 MiB.', 413);
   const bytes = await readFile(canonical);
@@ -144,7 +144,7 @@ export function createRenderer() {
     let url = '';
     let error = '';
     try {
-      const file = imagePath(image.attrGet('src'), env.filePath);
+      const file = imagePath(image.attrGet('src'), env.filePath, env.imageRoot);
       env.images.set(id, file);
       url = `/api/images/${env.hash}/${id}`;
     } catch (failure) {
@@ -260,10 +260,13 @@ async function jsonBody(request) {
   catch { throw new ReviewError(400, 'Invalid JSON.'); }
 }
 
-export async function startReview(file, { targetSession = null, idleMs = 60 * 60 * 1000, finishGraceMs = 15000 } = {}) {
+export async function startReview(file, { targetSession = null, imageRoot = null, idleMs = 60 * 60 * 1000, finishGraceMs = 15000 } = {}) {
   const filePath = await realpath(resolve(file));
   requireValue(['.md', '.markdown'].includes(extname(filePath).toLowerCase()), 'Choose a .md or .markdown file.');
   await sourceSnapshot(filePath);
+  imageRoot = imageRoot === null ? dirname(filePath) : await realpath(resolve(imageRoot));
+  requireValue((await stat(imageRoot)).isDirectory(), 'The image root must be a directory.');
+  requireValue(withinDirectory(imageRoot, filePath), 'The image root must contain the reviewed document.');
   if (targetSession !== null) textField(targetSession, 300, 'target session');
   const renderer = createRenderer();
   const token = randomBytes(32).toString('hex');
@@ -353,7 +356,7 @@ export async function startReview(file, { targetSession = null, idleMs = 60 * 60
           const snapshot = await sourceSnapshot(filePath);
           if (cached?.hash !== snapshot.hash) {
             const images = new Map();
-            const html = renderer.render(snapshot.text, { filePath, hash: snapshot.hash, images });
+            const html = renderer.render(snapshot.text, { filePath, imageRoot, hash: snapshot.hash, images });
             cached = { hash: snapshot.hash, html };
             imageFiles = images;
           }
@@ -367,7 +370,7 @@ export async function startReview(file, { targetSession = null, idleMs = 60 * 60
           requireValue(file && cached?.hash === hash, 'Image is not part of the current review.', 404);
           const snapshot = await sourceSnapshot(filePath);
           requireValue(snapshot.hash === hash, 'Document changed. Refresh before loading this image.', 409);
-          const image = await localImage(file, dirname(filePath));
+          const image = await localImage(file, imageRoot);
           send(response, 200, image.bytes, image.type);
         } else if (request.method === 'POST' && url.pathname === '/api/feedback') {
           requireValue(!finished, 'Review is finished.', 410);
@@ -452,7 +455,7 @@ export async function startReview(file, { targetSession = null, idleMs = 60 * 60
   await new Promise((resolveListen, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolveListen); });
   listenPort = server.address().port;
   origin = `http://127.0.0.1:${listenPort}`;
-  const session = { version: 1, origin, token, filePath, targetSession, pid: process.pid };
+  const session = { version: 1, origin, token, filePath, imageRoot, targetSession, pid: process.pid };
   try { await writeFile(sessionFile, JSON.stringify(session), { mode: 0o600, flag: 'wx' }); }
   catch (error) { await close(); throw error; }
   touch();
@@ -504,7 +507,7 @@ function options(args) {
   const result = { positional: [] };
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith('--')) {
-      requireValue(['--session', '--target', '--timeout', '--id', '--status', '--message'].includes(args[i]) && args[i + 1] && !args[i + 1].startsWith('--'), `Invalid option ${args[i]}.`);
+      requireValue(['--session', '--target', '--image-root', '--timeout', '--id', '--status', '--message'].includes(args[i]) && args[i + 1] && !args[i + 1].startsWith('--'), `Invalid option ${args[i]}.`);
       result[args[i].slice(2)] = args[++i];
     } else result.positional.push(args[i]);
   }
@@ -537,14 +540,14 @@ export async function main(args = process.argv.slice(2)) {
   let result;
   if (command === 'start') result = await startDetached(rest);
   else if (command === 'serve') {
-    requireValue(input.positional.length === 1, 'Usage: serve <document.md> [--target session-name]');
-    const review = await startReview(input.positional[0], { targetSession: input.target ?? null });
-    result = { sessionFile: review.sessionFile, url: review.url, filePath: review.filePath, targetSession: review.targetSession };
+    requireValue(input.positional.length === 1, 'Usage: serve <document.md> [--target session-name] [--image-root directory]');
+    const review = await startReview(input.positional[0], { targetSession: input.target ?? null, imageRoot: input['image-root'] ?? null });
+    result = { sessionFile: review.sessionFile, url: review.url, filePath: review.filePath, imageRoot: review.imageRoot, targetSession: review.targetSession };
     process.once('SIGTERM', () => { void review.close(); });
     process.once('SIGINT', () => { void review.close(); });
     if (process.send) process.send(result);
   } else {
-    requireValue(['wait', 'ack', 'status', 'stop'].includes(command) && input.session, 'Usage: start <document.md> [--target session-name] | wait/ack/status/stop --session <session.json>');
+    requireValue(['wait', 'ack', 'status', 'stop'].includes(command) && input.session, 'Usage: start <document.md> [--target session-name] [--image-root directory] | wait/ack/status/stop --session <session.json>');
     const session = await loadSession(input.session);
     if (command === 'wait') result = await api(session, `/api/wait?timeout=${encodeURIComponent(input.timeout ?? '540')}`);
     if (command === 'status') result = await api(session, '/api/state');
