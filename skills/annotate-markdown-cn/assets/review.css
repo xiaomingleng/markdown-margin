@@ -204,6 +204,7 @@ h1 {
 .status-badge::before { content: ""; width: 5px; height: 5px; background: currentColor; border-radius: 50%; }
 .status-badge[data-status="ready"],
 .status-badge[data-status="applied"],
+.status-badge[data-status="completed"],
 .status-badge[data-status="finished"] { color: var(--success); background: var(--success-soft); }
 .status-badge[data-status="pending"],
 .status-badge[data-status="delivered"],
@@ -444,6 +445,7 @@ h1 {
 .composer-heading-actions { display: flex; align-items: center; gap: 10px; }
 .composer-heading-actions .remove-button { margin-left: 0; }
 .composer h3 { margin: 0; font-size: 12px; font-weight: 650; }
+.composer select { width: 100%; max-width: 100%; margin-bottom: 10px; }
 .quote {
   margin: 0 0 10px;
   padding: 1px 0 1px 10px;
@@ -488,6 +490,10 @@ textarea:focus { border-color: var(--accent); }
 .anchor-button:disabled { color: var(--muted); opacity: 1; }
 .draft-label { font-size: 9px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
 .comment-body { font-size: 12px; line-height: 1.7; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-reply { margin-top: 12px; padding: 12px; border-left: 3px solid var(--accent); border-radius: 6px; background: var(--surface-soft); }
+.agent-reply h4 { margin: 12px 0 4px; font-size: 12px; }
+.agent-reply p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.reply-status { color: var(--accent-text); font-size: 12px; }
 .comment-actions { display: flex; align-items: center; gap: 12px; padding-top: 7px; margin-top: 9px; border-top: 1px solid var(--border); }
 .comment-actions .text-button { font-size: 10px; }
 .is-stale { border-color: var(--warning-border); }

@@ -527,6 +527,74 @@ test('a waiting consumer receives new feedback and concurrent waiters are reject
   assert.equal((await review.api('/api/wait?timeout=0.05')).id, 'batch-1');
 });
 
+test('questions and edits receive separate answers/actions that survive source changes and later batches', async t => {
+  const review = await fixture(t);
+  const feedback = review.feedback('questions');
+  feedback.comments[0].kind = 'question';
+  feedback.comments.push({ ...feedback.comments[0], id: 'edit-1', kind: 'edit', comment: 'Fix the typo.' });
+  await review.api('/api/feedback', { body: feedback });
+  assert.deepEqual((await review.api('/api/wait?timeout=0.05')).comments, feedback.comments);
+  await review.api('/api/ack', { body: { id: feedback.id, status: 'applied' }, status: 400, error: /requires answers/ });
+  const replies = [
+    { id: 'comment-1', status: 'answered', answer: 'Here is why.', action: 'No document changes.' },
+    { id: 'edit-1', status: 'applied', answer: 'That was a typo.', action: 'Corrected the typo in the reviewed paragraph.' },
+  ];
+  await writeFile(review.file, `${SOURCE}\nCorrected.\n`);
+  const ack = { id: feedback.id, status: 'completed', replies };
+  await review.api('/api/ack', { body: ack });
+  await review.api('/api/ack', { body: ack });
+  await review.api('/api/ack', { body: { ...ack, replies: replies.map(reply => ({ ...reply, answer: 'Different answer.' })) }, status: 409 });
+  const state = await review.api('/api/state');
+  assert.notEqual(state.hash, feedback.hash);
+  assert.deepEqual(state.reviewedBatches, [{ id: feedback.id, hash: feedback.hash, status: 'completed', comments: feedback.comments, replies }]);
+  const next = review.feedback('next', state.hash);
+  next.comments[0].kind = 'question';
+  await review.api('/api/feedback', { body: next });
+  const failure = [{ id: 'comment-1', status: 'failed', answer: 'The source anchor is ambiguous.', action: 'No document changes; reselect the passage.' }];
+  await review.api('/api/ack', { body: { id: next.id, status: 'failed', replies: failure } });
+  assert.equal((await review.api('/api/state')).reviewedBatches.length, 2);
+});
+
+test('structured acknowledgments reject incomplete, invalid, and contradictory replies without resolving feedback', async t => {
+  const review = await fixture(t);
+  const feedback = review.feedback();
+  feedback.comments[0].kind = 'question';
+  feedback.comments.push({ ...feedback.comments[0], id: 'question-2' });
+  await review.api('/api/feedback', { body: feedback });
+  const valid = feedback.comments.map(comment => ({ id: comment.id, status: 'answered', answer: 'An answer.', action: 'No document changes.' }));
+  for (const replies of [
+    null, [], valid.slice(0, 1), [valid[0], valid[0]],
+    valid.map(reply => ({ ...reply, id: 'unknown' })),
+    valid.map(reply => ({ ...reply, answer: '' })),
+    valid.map(reply => ({ ...reply, action: '' })),
+    valid.map(reply => ({ ...reply, status: 'pending' })),
+    valid.map(reply => ({ ...reply, answer: 'x'.repeat(8001) })),
+    valid.map(reply => ({ ...reply, action: 'x'.repeat(2001) })),
+    valid.map(reply => ({ ...reply, status: 'failed' })),
+  ]) {
+    await review.api('/api/ack', { body: { id: feedback.id, status: 'completed', replies }, status: 400 });
+  }
+  await review.api('/api/ack', { body: { id: feedback.id, status: 'failed', replies: valid }, status: 400 });
+  await review.api('/api/ack', { body: { id: feedback.id, status: 'failed', message: 'Failure without per-comment explanation.' }, status: 400 });
+  assert.equal((await review.api('/api/state')).latestBatch.status, 'pending');
+});
+
+test('CLI reply files acknowledge question-only feedback without changing the source', async t => {
+  const review = await fixture(t);
+  const feedback = review.feedback();
+  feedback.comments[0].kind = 'question';
+  await review.api('/api/feedback', { body: feedback });
+  const path = join(review.directory, 'replies.json');
+  await writeFile(path, '{invalid');
+  const args = ['ack', '--session', review.sessionFile, '--id', feedback.id, '--status', 'completed', '--replies', path];
+  await assert.rejects(main(args), /Invalid reply-file JSON/);
+  const replies = [{ id: 'comment-1', status: 'answered', answer: 'The wording describes a local-only preview.', action: 'No document changes.' }];
+  await writeFile(path, JSON.stringify(replies));
+  assert.deepEqual(await main(args), { id: feedback.id, status: 'completed' });
+  assert.equal(await readFile(review.file, 'utf8'), SOURCE);
+  assert.deepEqual((await review.api('/api/state')).reviewedBatches[0].replies, replies);
+});
+
 test('acknowledgment rejects unknown batches, invalid states, and oversized messages', async t => {
   const review = await fixture(t);
   await review.api('/api/ack', { body: { id: 'unknown', status: 'applied' }, status: 404 });
@@ -715,6 +783,8 @@ test('JSON endpoints reject malformed, empty, wrong-content-type, and oversized 
 });
 
 const invalidFeedback = [
+  ['invalid comment kind', value => { value.comments[0].kind = 'run-command'; }],
+  ['null comment kind', value => { value.comments[0].kind = null; }],
   ['missing batch ID', value => { delete value.id; }],
   ['null batch ID', value => { value.id = null; }],
   ['numeric batch ID', value => { value.id = 7; }],

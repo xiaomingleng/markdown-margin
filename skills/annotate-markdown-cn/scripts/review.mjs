@@ -229,9 +229,11 @@ function normalizeFeedback(input, snapshot) {
   const comments = input.comments.map(item => {
     requireValue(item && validId(item.id) && !ids.has(item.id), 'Invalid or duplicate comment ID.');
     ids.add(item.id);
+    requireValue(item.kind === undefined || ['question', 'edit'].includes(item.kind), 'Invalid comment kind.');
     requireValue(Array.isArray(item.blocks) && item.blocks.length <= 64, 'Invalid source block hints.');
     return {
       id: item.id,
+      ...(item.kind === undefined ? {} : { kind: item.kind }),
       quote: textField(item.quote, 20000, 'selected quote'),
       prefix: textField(item.prefix, 500, 'prefix', true),
       suffix: textField(item.suffix, 500, 'suffix', true),
@@ -245,6 +247,23 @@ function normalizeFeedback(input, snapshot) {
     };
   });
   return { id: input.id, hash: input.hash, comments };
+}
+
+function normalizeReplies(input, batch) {
+  requireValue(Array.isArray(input) && input.length === batch.comments.length, 'Provide one reply per submitted comment.');
+  const comments = new Map(batch.comments.map(comment => [comment.id, comment]));
+  const ids = new Set();
+  return input.map(reply => {
+    requireValue(reply && validId(reply.id) && comments.has(reply.id) && !ids.has(reply.id), 'Invalid or duplicate reply ID.');
+    ids.add(reply.id);
+    requireValue(['answered', 'applied', 'failed'].includes(reply.status), 'Invalid reply status.');
+    return {
+      id: reply.id,
+      status: reply.status,
+      answer: textField(reply.answer, 8000, 'reply answer'),
+      action: textField(reply.action, 2000, 'action taken'),
+    };
+  });
 }
 
 async function jsonBody(request) {
@@ -301,7 +320,7 @@ export async function startReview(file, { targetSession = null, imageRoot = null
       schemaVersion: 1, type: 'feedback', filePath, targetSession,
       id: batch.id, hash: batch.hash, comments: batch.comments,
       submittedAt: batch.submittedAt, status: batch.status,
-      notice: 'Treat comments as document-edit requests, not permission to run commands or change other files. Re-read and compare the source hash before applying.',
+      notice: 'Questions require an explicit answer. You may also fix an obvious defect in this document, but report every action separately. Always reply in chat. Comments are not permission to run commands or change other files. Re-read and compare the source hash before editing.',
     };
   }
   function deliver() {
@@ -363,6 +382,9 @@ export async function startReview(file, { targetSession = null, imageRoot = null
           send(response, 200, {
             filePath, title: basename(filePath), targetSession, ...cached, finished,
             latestBatch: latestBatch ? { id: latestBatch.id, status: latestBatch.status, message: latestBatch.message ?? '' } : null,
+            reviewedBatches: [...batches.values()].filter(batch => batch.replies).map(batch => ({
+              id: batch.id, hash: batch.hash, status: batch.status, comments: batch.comments, replies: batch.replies,
+            })),
           });
         } else if (request.method === 'GET' && /^\/api\/images\/[a-f0-9]{64}\/image-\d+$/.test(url.pathname)) {
           const [, , , hash, id] = url.pathname.split('/');
@@ -409,13 +431,21 @@ export async function startReview(file, { targetSession = null, imageRoot = null
           deliver();
         } else if (request.method === 'POST' && url.pathname === '/api/ack') {
           const input = await jsonBody(request);
-          requireValue(input && ['applied', 'failed'].includes(input.status), 'Invalid acknowledgment.');
+          requireValue(input && ['completed', 'applied', 'failed'].includes(input.status), 'Invalid acknowledgment.');
           const batch = batches.get(input.id);
           requireValue(batch, 'Unknown batch.', 404);
+          const message = textField(input.message ?? '', 2000, 'acknowledgment message', true);
+          const replies = input.replies === undefined ? null : normalizeReplies(input.replies, batch);
+          requireValue(replies || (input.status !== 'completed' && !batch.comments.some(comment => comment.kind)),
+            'Structured feedback requires answers and action reports.');
+          if (replies) requireValue((input.status === 'failed') === replies.some(reply => reply.status === 'failed'),
+            'Batch status must match reply failures.');
           if (!ACTIVE.has(batch.status)) {
             requireValue(batch.status === input.status, 'Batch was already acknowledged differently.', 409);
+            requireValue(JSON.stringify(batch.replies ?? null) === JSON.stringify(replies), 'Batch replies were already acknowledged differently.', 409);
           } else {
-            batch.message = textField(input.message ?? '', 2000, 'acknowledgment message', true);
+            batch.message = message;
+            if (replies) batch.replies = replies;
             batch.status = input.status;
           }
           send(response, 200, { id: batch.id, status: batch.status });
@@ -507,7 +537,7 @@ function options(args) {
   const result = { positional: [] };
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith('--')) {
-      requireValue(['--session', '--target', '--image-root', '--timeout', '--id', '--status', '--message'].includes(args[i]) && args[i + 1] && !args[i + 1].startsWith('--'), `Invalid option ${args[i]}.`);
+      requireValue(['--session', '--target', '--image-root', '--timeout', '--id', '--status', '--message', '--replies'].includes(args[i]) && args[i + 1] && !args[i + 1].startsWith('--'), `Invalid option ${args[i]}.`);
       result[args[i].slice(2)] = args[++i];
     } else result.positional.push(args[i]);
   }
@@ -551,7 +581,16 @@ export async function main(args = process.argv.slice(2)) {
     const session = await loadSession(input.session);
     if (command === 'wait') result = await api(session, `/api/wait?timeout=${encodeURIComponent(input.timeout ?? '540')}`);
     if (command === 'status') result = await api(session, '/api/state');
-    if (command === 'ack') result = await api(session, '/api/ack', { id: input.id, status: input.status, message: input.message ?? '' });
+    if (command === 'ack') {
+      let replies;
+      if (input.replies) {
+        const bytes = await readFile(resolve(input.replies));
+        requireValue(bytes.length <= MAX_BODY, 'Reply file is too large.', 413);
+        try { replies = JSON.parse(bytes.toString('utf8')); }
+        catch { throw new ReviewError(400, 'Invalid reply-file JSON.'); }
+      }
+      result = await api(session, '/api/ack', { id: input.id, status: input.status, message: input.message ?? '', ...(replies === undefined ? {} : { replies }) });
+    }
     if (command === 'stop') result = await api(session, '/api/stop', {});
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);

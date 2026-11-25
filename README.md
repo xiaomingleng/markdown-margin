@@ -9,6 +9,13 @@ agent revise the source. Margin turns document review into a simple loop:
 **Leave feedback where it belongs.** Select a passage to comment, or add a
 one-click **Delete** or **Refine** request.
 
+**Ask and get an answer.** Choose **? Ask** for a question about selected text.
+Your agent must answer, even if it also fixes an obvious defect. Each submitted
+comment gets an **Answer** and **Action taken** card, plus a brief chat reply.
+Question-only replies can leave the document unchanged; additional edits must
+be explained explicitly. Cards remain visible after source refreshes and later
+submissions during the same review session.
+
 ![Selected text and the Comment, Delete, and Refine actions](docs/selection-demo.png)
 
 **Review drafts before applying.** Save and edit comments, then submit them
@@ -38,7 +45,8 @@ which you can try with your agent.
 2. Open the local review link your agent provides.
 3. Select text, add feedback, and save your drafts. Nothing is submitted yet.
 4. Click **Apply feedback**. Your agent receives the comments and makes the
-   requested edits; review the refreshed preview.
+   requested edits or answers questions; review the answer/action cards and any
+   refreshed preview.
 5. Choose **Finish review** when you're done.
 
 ## Privacy

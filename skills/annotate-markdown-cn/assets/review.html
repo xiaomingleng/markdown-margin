@@ -47,7 +47,7 @@
       <section class="document-column" aria-label="Document preview">
         <div class="document-toolbar">
           <span id="document-caption">Document preview</span>
-          <span class="selection-instruction">Select text, then choose Comment, Delete, or Refine</span>
+          <span class="selection-instruction">Select text, then choose Ask, Comment, Delete, or Refine</span>
         </div>
         <div class="document-sheet">
           <article id="document" class="markdown-body" tabindex="0" aria-label="Document to review" aria-busy="true">
@@ -65,13 +65,14 @@
           </div>
           <span class="private-label">Tab only</span>
         </div>
-        <p class="sidebar-intro">Select a passage, then comment or add a one-click Delete or Refine instruction. Review drafts before sending them together.</p>
+        <p class="sidebar-intro">Select a passage to ask a question or request an edit. Your agent answers questions and reports any additional changes. Review drafts before sending them together.</p>
         <div id="selection-actions" class="selection-actions" role="toolbar" aria-label="Actions for selected text" hidden>
           <button id="comment-selection" class="selection-action" type="button" aria-label="Comment on selected text" title="Comment on selected text">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 5h14v10H9l-4 4V5Zm3 4h8M8 12h5"/></svg>
             <span>Comment</span>
           </button>
           <button id="delete-selection" class="selection-action selection-action-danger" type="button" title="Add a draft asking to delete the selected text">Delete</button>
+          <button id="ask-selection" class="selection-action" type="button" aria-label="Ask about selected text" title="Ask a question about selected text"><span aria-hidden="true">?</span><span>Ask</span></button>
           <button id="refine-selection" class="selection-action" type="button" title="Add a draft asking to refine the selected text">Refine</button>
         </div>
         <details id="keyboard-picker" class="keyboard-picker">
@@ -79,7 +80,7 @@
           <label class="field-label" for="keyboard-passage">Source passage</label>
           <select id="keyboard-passage" aria-describedby="keyboard-help"></select>
           <button id="use-keyboard-passage" class="button button-outline button-small" type="button" disabled>Use this passage</button>
-          <p id="keyboard-help" class="keyboard-hint">Choose a source block with the arrow keys, then use the selection popup to comment, delete, refine, or reselect a stale anchor.</p>
+          <p id="keyboard-help" class="keyboard-hint">Choose a source block with the arrow keys, then use the selection popup to ask, comment, delete, refine, or reselect a stale anchor.</p>
         </details>
         <p class="keyboard-hint">Escape closes the composer or passage picker.</p>
 
@@ -99,6 +100,8 @@
           <blockquote id="composer-quote" class="quote"></blockquote>
           <p id="composer-anchor" class="anchor-hint"></p>
           <p id="composer-stale" class="stale-note" hidden>The source changed. Save this note, then reselect its passage before applying.</p>
+          <label class="field-label" for="comment-kind">Feedback intent</label>
+          <select id="comment-kind"><option value="edit">Edit request</option><option value="question">Question - answer required</option></select>
           <label class="field-label" for="comment-text">Your comment</label>
           <textarea id="comment-text" name="comment" rows="4" maxlength="8000" required aria-describedby="comment-help"></textarea>
           <div class="composer-footer">
@@ -130,10 +133,16 @@
           </details>
         </section>
 
+        <section id="replies" class="submission" aria-labelledby="replies-heading" hidden>
+          <h3 id="replies-heading">Answers &amp; actions</h3>
+          <p class="field-hint">Replies stay here during source refreshes and later submissions in this review session.</p>
+          <ol id="reply-list" class="comment-list" aria-label="Agent answers and actions"></ol>
+        </section>
+
         <div class="apply-panel">
           <p id="apply-hint" class="apply-hint">Save a comment to start your review.</p>
           <button id="apply-feedback" class="button button-primary apply-button" type="button" disabled>Apply feedback</button>
-          <p class="apply-footnote">Sends comments to the target session. The document updates when the source changes.</p>
+          <p class="apply-footnote">Sends questions and edit requests to the target session. Answers and action reports appear here; a source update alone is not a reply.</p>
         </div>
       </aside>
     </main>

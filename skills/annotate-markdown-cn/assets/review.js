@@ -36,6 +36,7 @@
   let latestBatch = null;
   let lastSubmission = null;
   let renderedSubmission = null;
+  let renderedReplies = null;
   let mermaidPromise = null;
   let diagramSequence = 0;
   const mediaZoom = new WeakMap();
@@ -189,6 +190,7 @@
       renderDrafts();
     }
     latestBatch = next.latestBatch || null;
+    renderReplies(next.reviewedBatches || []);
     if (latestBatch) reconcileBatch(latestBatch);
     if (next.finished) {
       showFinished(false);
@@ -425,12 +427,13 @@
       lastSubmission.message = typeof batch.message === "string" ? batch.message : "";
       if (!lastSubmission.rejected) removeSubmittedDrafts(lastSubmission);
     } else if (!lastSubmission || lastSubmission.external) {
+      const reviewed = current.reviewedBatches?.find(item => item.id === batch.id);
       lastSubmission = {
         id: batch.id,
         status: batch.status,
         message: typeof batch.message === "string" ? batch.message : "",
-        comments: [],
-        hash: null,
+        comments: reviewed?.comments || [],
+        hash: reviewed?.hash || null,
         external: true,
       };
     }
@@ -693,7 +696,7 @@
       refine: "Refine this selected passage for clarity and concision while preserving its intended meaning.",
     };
     const labels = { delete: "Delete", refine: "Refine" };
-    drafts.push({ id: crypto.randomUUID(), ...captured.anchor, comment: instructions[action], hash: captured.hash });
+    drafts.push({ id: crypto.randomUUID(), ...captured.anchor, kind: "edit", comment: instructions[action], hash: captured.hash });
     clearSelectionOffer();
     renderDrafts();
     updateControls();
@@ -701,7 +704,7 @@
     announce(`${labels[action]} instruction saved as a draft. It has not been sent.`);
   }
 
-  function openSelection(captured) {
+  function openSelection(captured, kind = "edit") {
     if (!validSelection(captured)) return;
     if (reanchorId) {
       const draft = drafts.find((item) => item.id === reanchorId);
@@ -728,7 +731,7 @@
       notice("There are already 50 drafts. Apply or remove some drafts first.");
       return;
     }
-    composer = { id: null, anchor: captured.anchor, hash: captured.hash, placement: captured.placement, initialText: "" };
+    composer = { id: null, kind, initialKind: kind, anchor: captured.anchor, hash: captured.hash, placement: captured.placement, initialText: "" };
     $("comment-text").value = "";
     selectionCandidate = null;
     positionSelectionOffer();
@@ -742,7 +745,9 @@
   function updateComposer() {
     $("composer").hidden = !composer;
     if (!composer) return;
-    $("composer-heading").textContent = composer.id ? "Refine comment" : "New comment";
+    $("composer-heading").textContent = composer.kind === "question" ? (composer.id ? "Edit question" : "Ask a question") : (composer.id ? "Refine comment" : "New comment");
+    $("comment-kind").value = composer.kind;
+    $("comment-help").textContent = composer.kind === "question" ? "An answer is required. Any additional document changes must be reported." : "Describe the requested change; your agent will report its outcome.";
     $("composer-quote").textContent = composer.anchor.quote;
     $("composer-anchor").textContent = lineHint(composer.anchor.blocks);
     $("composer-stale").hidden = composer.hash === current.hash;
@@ -752,7 +757,7 @@
 
   function closeComposer(confirmDiscard = true) {
     if (!composer) return true;
-    if (confirmDiscard && $("comment-text").value !== composer.initialText
+    if (confirmDiscard && ($("comment-text").value !== composer.initialText || composer.kind !== composer.initialKind)
         && !window.confirm("Discard the unsaved changes in this composer? Saved drafts will be kept.")) return false;
     composer = null;
     $("comment-text").value = "";
@@ -778,6 +783,8 @@
     reanchorId = null;
     composer = {
       id: draft.id,
+      kind: draft.kind || "edit",
+      initialKind: draft.kind || "edit",
       hash: draft.hash,
       anchor: { quote: draft.quote, prefix: draft.prefix, suffix: draft.suffix, blocks: draft.blocks },
       placement: draftPlacement(draft),
@@ -823,7 +830,7 @@
       $("comment-text").focus();
       return;
     }
-    const saved = { id: composer.id || crypto.randomUUID(), ...composer.anchor, comment, hash: composer.hash };
+    const saved = { id: composer.id || crypto.randomUUID(), ...composer.anchor, kind: composer.kind, comment, hash: composer.hash };
     const index = drafts.findIndex((draft) => draft.id === saved.id);
     if (index >= 0) drafts[index] = saved;
     else if (drafts.length < MAX_COMMENTS) drafts.push(saved);
@@ -866,7 +873,7 @@
     window.setTimeout(() => block.classList.remove("anchor-highlight"), 1800);
   }
 
-  function makeCommentCard(comment, editable) {
+  function makeCommentCard(comment, editable, reply = null) {
     const card = makeElement("li", "comment-card");
     card.dataset.commentId = comment.id;
     const isStale = Boolean(current && comment.hash !== current.hash);
@@ -879,6 +886,19 @@
     anchor.addEventListener("click", () => focusAnchor(comment));
     top.append(anchor, makeElement("span", `draft-label${isStale ? " stale-label" : ""}`, editable ? (isStale ? "Stale anchor" : "Draft") : "Submitted"));
     card.append(top, makeElement("blockquote", "quote", comment.quote), makeElement("p", "comment-body", comment.comment));
+    card.append(makeElement("p", "field-hint", comment.kind === "question" ? "Question - answer required" : "Edit request"));
+    if (reply) {
+      const response = makeElement("section", "agent-reply");
+      response.setAttribute("aria-label", "Agent reply");
+      response.append(
+        makeElement("strong", "reply-status", { answered: "Answered", applied: comment.kind === "question" ? "Answered + Updated" : "Applied", failed: "Failed" }[reply.status]),
+        makeElement("h4", "", "Answer"),
+        makeElement("p", "reply-answer", reply.answer),
+        makeElement("h4", "", "Action taken"),
+        makeElement("p", "reply-action", reply.action),
+      );
+      card.append(response);
+    }
     if (editable) {
       if (isStale) card.append(makeElement("p", "stale-note", "Source changed. Reselect this passage, or remove this draft and select again."));
       const actions = makeElement("div", "comment-actions");
@@ -907,13 +927,26 @@
     return card;
   }
 
+  function renderReplies(batches) {
+    const key = JSON.stringify([current.hash, batches]);
+    if (key === renderedReplies) return;
+    renderedReplies = key;
+    $("replies").hidden = batches.length === 0;
+    const cards = [];
+    for (const batch of [...batches].reverse()) {
+      const replies = new Map(batch.replies.map(reply => [reply.id, reply]));
+      for (const comment of batch.comments) cards.push(makeCommentCard({ ...comment, hash: batch.hash }, false, replies.get(comment.id)));
+    }
+    $("reply-list").replaceChildren(...cards);
+  }
+
   function renderDrafts() {
     const activeId = document.activeElement && document.activeElement.id;
     const fragment = document.createDocumentFragment();
     for (const draft of drafts) fragment.append(makeCommentCard(draft, true));
     $("draft-list").replaceChildren(fragment);
     $("draft-count").textContent = String(drafts.length);
-    $("empty-state").hidden = drafts.length > 0 || Boolean(composer) || finished;
+    $("empty-state").hidden = drafts.length > 0 || Boolean(composer) || finished || Boolean(current?.reviewedBatches?.length);
     if (activeId) {
       const replacement = document.getElementById(activeId);
       if (replacement && replacement !== document.activeElement) replacement.focus({ preventScroll: true });
@@ -926,8 +959,16 @@
     pending: "Queued",
     delivered: "Delivered",
     applied: "Applied",
+    completed: "Completed",
     failed: "Failed",
   };
+
+  function retryComments(batch) {
+    const reviewed = current.reviewedBatches?.find(item => item.id === batch.id);
+    if (!reviewed) return batch.comments;
+    const failed = new Set(reviewed.replies.filter(reply => reply.status === "failed").map(reply => reply.id));
+    return batch.comments.filter(comment => failed.has(comment.id));
+  }
 
   function renderSubmission() {
     const batch = lastSubmission;
@@ -938,18 +979,19 @@
     const explanations = {
       sending: "Sending this batch. Please wait before trying again.",
       uncertain: "Delivery could not be confirmed. Retry this exact batch; its ID stays the same to prevent duplicate feedback. Draft editing is paused until it is resolved.",
-      pending: "Feedback is queued for the target session. Another batch and Finish are paused until the target reports applied or failed.",
-      delivered: "Feedback reached the target session. Waiting for it to report applied or failed; a source update alone is not confirmation.",
+      pending: "Feedback is queued for the target session. Another batch and Finish are paused until the target reports its answers and actions.",
+      delivered: "Feedback reached the target session. Waiting for its answers and action reports; a source update alone is not a reply.",
       applied: "The target session marked this feedback as applied. Review the updated document before sending more.",
-      failed: batch.rejected ? "The server did not accept this batch. Your drafts have been kept." : "The target session reported that this batch failed. You can restore the submitted comments as drafts.",
+      completed: "The target session replied to this feedback. Read the answers and action reports below.",
+      failed: batch.rejected ? "The server did not accept this batch. Your drafts have been kept." : "Some feedback could not be fulfilled. Read the explanations below; failed comments can be restored as drafts.",
     };
     $("submission-message").textContent = [explanations[batch.status] || "", batch.message || ""].filter(Boolean).join(" ");
     $("submission-id").textContent = `Batch ${batch.id}`;
     $("retry-submit").hidden = batch.status !== "uncertain" || finished;
     $("retry-submit").disabled = sending || finishing || !connected;
-    $("restore-submitted").hidden = batch.status !== "failed" || batch.rejected || batch.restored || !batch.comments.length || finished;
-    $("restore-submitted").disabled = editingLocked() || drafts.length + batch.comments.length > MAX_COMMENTS;
-    $("submitted-details").hidden = batch.comments.length === 0;
+    $("restore-submitted").hidden = batch.status !== "failed" || batch.rejected || batch.restored || !retryComments(batch).length || finished;
+    $("restore-submitted").disabled = editingLocked() || drafts.length + retryComments(batch).length > MAX_COMMENTS;
+    $("submitted-details").hidden = batch.comments.length === 0 || Boolean(current.reviewedBatches?.some(reviewed => reviewed.id === batch.id));
     const renderKey = `${batch.id}:${current ? current.hash : ""}`;
     if (renderedSubmission !== renderKey) {
       const newBatch = !renderedSubmission || !renderedSubmission.startsWith(`${batch.id}:`);
@@ -967,14 +1009,16 @@
     $("finish").disabled = !current || !connected || locked || waiting;
     $("finish").textContent = finished ? "Review finished" : finishing ? "Finishing…" : "Finish review";
     $("apply-feedback").disabled = !current || !connected || locked || waiting || !drafts.length || stale > 0 || Boolean(composer) || Boolean(reanchorId);
-    $("apply-feedback").textContent = sending ? "Sending feedback…" : waiting ? "Awaiting application" : "Apply feedback";
+    $("apply-feedback").textContent = sending ? "Sending feedback…" : waiting ? "Awaiting reply" : "Apply feedback";
     const selectionDisabled = locked || !selectionCandidate || !selectionCandidate.anchor;
     $("comment-selection").disabled = selectionDisabled;
+    $("ask-selection").disabled = selectionDisabled;
     $("delete-selection").disabled = selectionDisabled;
     $("refine-selection").disabled = selectionDisabled;
     for (const button of article.querySelectorAll("[data-diagram-comment], [data-image-comment]")) button.disabled = locked;
     positionSelectionOffer();
     $("comment-text").disabled = locked && !finished;
+    $("comment-kind").disabled = locked;
     $("comment-text").readOnly = finished;
     $("keyboard-passage").disabled = locked;
     $("use-keyboard-passage").disabled = locked || !$("keyboard-passage").options.length;
@@ -983,7 +1027,7 @@
     $("delete-comment").disabled = locked;
     $("cancel-reanchor").disabled = locked;
     $("reanchor-notice").hidden = !reanchorId || finished;
-    $("empty-state").hidden = drafts.length > 0 || Boolean(composer) || finished;
+    $("empty-state").hidden = drafts.length > 0 || Boolean(composer) || finished || Boolean(current?.reviewedBatches?.length);
     for (const button of $("draft-list").querySelectorAll("[data-draft-action]")) button.disabled = locked;
     let hint = "Save a comment to start your review.";
     if (finished) hint = "This review has ended. No more comments will be sent.";
@@ -999,14 +1043,14 @@
     $("session-status").dataset.status = status;
     $("session-status").textContent = { finished: "Finished", offline: "Disconnected", sending: "Sending", pending: "Awaiting target", uncertain: "Action needed", ready: "Reviewing" }[status];
     $("source-status").textContent = finished
-      ? "Review finished. Polling stopped. This tab retains the last document and submission for reference."
+      ? "Review finished. Polling stopped. This tab retains the document, submission, and replies for reference."
       : stale ? "Source updated. Stale drafts are kept in this tab until you reselect or remove them."
         : "Drafts stay in this tab. Nothing is sent until you apply feedback.";
     renderSubmission();
   }
 
   function commentPayload(draft) {
-    return { id: draft.id, quote: draft.quote, prefix: draft.prefix, suffix: draft.suffix, blocks: draft.blocks, comment: draft.comment };
+    return { id: draft.id, kind: draft.kind || "edit", quote: draft.quote, prefix: draft.prefix, suffix: draft.suffix, blocks: draft.blocks, comment: draft.comment };
   }
 
   async function applyFeedback() {
@@ -1030,11 +1074,11 @@
     updateControls();
     try {
       const response = await api("/api/feedback", batch.payload);
-      if (!response || response.id !== batch.id || !["pending", "delivered", "applied", "failed"].includes(response.status)) {
+      if (!response || response.id !== batch.id || !["pending", "delivered", "completed", "applied", "failed"].includes(response.status)) {
         throw new ApiError("The server did not confirm this submission ID.");
       }
       const known = latestBatch && latestBatch.id === batch.id ? latestBatch : null;
-      batch.status = known && ["applied", "failed"].includes(known.status) ? known.status : response.status;
+      batch.status = known && ["completed", "applied", "failed"].includes(known.status) ? known.status : response.status;
       batch.message = known && known.message || "";
       removeSubmittedDrafts(batch);
       announce("Feedback submitted. Waiting for the target session to report its outcome.");
@@ -1069,15 +1113,16 @@
   function restoreSubmission() {
     const batch = lastSubmission;
     if (!batch || batch.status !== "failed" || batch.rejected || batch.restored || editingLocked()) return;
-    if (drafts.length + batch.comments.length > MAX_COMMENTS) {
+    const comments = retryComments(batch);
+    if (drafts.length + comments.length > MAX_COMMENTS) {
       notice("Remove some drafts before restoring this batch (50-comment limit).");
       return;
     }
-    for (const comment of batch.comments) drafts.push({ ...comment, id: crypto.randomUUID(), hash: batch.hash });
+    for (const comment of comments) drafts.push({ ...comment, id: crypto.randomUUID(), hash: batch.hash });
     batch.restored = true;
     renderDrafts();
     updateControls();
-    notice("Submitted comments restored as drafts. Reselect any stale passages before applying again.");
+    notice("Failed comments restored as drafts. Reselect any stale passages before applying again.");
   }
 
   function showFinished(discardDrafts) {
@@ -1126,6 +1171,11 @@
   });
   $("composer").addEventListener("submit", saveDraft);
   $("comment-text").addEventListener("input", updateControls);
+  $("comment-kind").addEventListener("change", () => {
+    if (!composer) return;
+    composer.kind = $("comment-kind").value;
+    updateComposer();
+  });
   $("comment-text").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
@@ -1143,10 +1193,11 @@
     updateControls();
     announce("Reselect canceled. The original draft is unchanged.");
   });
-  for (const id of ["comment-selection", "delete-selection", "refine-selection"]) {
+  for (const id of ["comment-selection", "ask-selection", "delete-selection", "refine-selection"]) {
     $(id).addEventListener("pointerdown", (event) => event.preventDefault());
   }
   $("comment-selection").addEventListener("click", () => openSelection(selectionCandidate));
+  $("ask-selection").addEventListener("click", () => openSelection(selectionCandidate, "question"));
   $("delete-selection").addEventListener("click", () => addQuickDraft("delete"));
   $("refine-selection").addEventListener("click", () => addQuickDraft("refine"));
   $("use-keyboard-passage").addEventListener("click", useKeyboardPassage);
