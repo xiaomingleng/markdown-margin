@@ -4,7 +4,7 @@ import { fork } from 'node:child_process';
 import { createServer, request as httpRequest } from 'node:http';
 import { mkdtemp, readFile, realpath, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import MarkdownIt from 'markdown-it';
 import rendererPackage from 'markdown-it/package.json' with { type: 'json' };
@@ -244,7 +244,7 @@ export async function startReview(file, { targetSession = null, idleMs = 60 * 60
           const snapshot = await sourceSnapshot(filePath);
           if (cached?.hash !== snapshot.hash) cached = { hash: snapshot.hash, html: renderer.render(snapshot.text) };
           send(response, 200, {
-            filePath, title: filePath.split('/').pop(), targetSession, ...cached, finished,
+            filePath, title: basename(filePath), targetSession, ...cached, finished,
             latestBatch: latestBatch ? { id: latestBatch.id, status: latestBatch.status, message: latestBatch.message ?? '' } : null,
           });
         } else if (request.method === 'POST' && url.pathname === '/api/feedback') {

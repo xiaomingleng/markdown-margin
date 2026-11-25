@@ -7,12 +7,13 @@ import { access, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:f
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import { createRenderer, startReview } from './review.mjs';
 
 test('CLI blocks startup with an outdated renderer before reading a document', async () => {
   const installed = JSON.parse(await readFile(new URL('../node_modules/markdown-it/package.json', import.meta.url)));
   const pinned = JSON.parse(await readFile(new URL('../package.json', import.meta.url)));
-  const result = spawnSync(process.execPath, [new URL('./review.mjs', import.meta.url).pathname, 'start', '/nonexistent-review-fixture.md'], { encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./review.mjs', import.meta.url)), 'start', '/nonexistent-review-fixture.md'], { encoding: 'utf8' });
   assert.equal(result.status, 1);
   if (installed.version !== pinned.dependencies['markdown-it']) assert.match(result.stderr, /Renderer does not match the pinned version/);
   else assert.match(result.stderr, /ENOENT/);
@@ -162,7 +163,7 @@ test('renderer disables raw HTML, escapes code, replaces images, and isolates li
   assert.doesNotMatch(html, /href="javascript:/i);
 });
 
-test('session metadata, private capability file, and initial state describe the disposable source', async t => {
+test('session metadata and initial state describe the disposable source', async t => {
   const review = await fixture(t, { targetSession: 'editing-session' });
   assert.match(review.origin, /^http:\/\/127\.0\.0\.1:\d+$/);
   assert.match(review.token, /^[a-f0-9]{64}$/);
@@ -174,7 +175,6 @@ test('session metadata, private capability file, and initial state describe the 
   assert.equal(session.filePath, review.filePath);
   assert.equal(session.targetSession, 'editing-session');
   assert.equal(session.pid, process.pid);
-  assert.equal((await stat(review.sessionFile)).mode & 0o777, 0o600);
   const state = await review.api('/api/state');
   assert.equal(state.filePath, review.filePath);
   assert.equal(state.title, 'review.md');
@@ -185,6 +185,19 @@ test('session metadata, private capability file, and initial state describe the 
   assert.match(state.html, /Hello 世界 &amp; &lt;friends&gt;/);
   assert.ok(!JSON.stringify(state).includes(review.token));
   assert.deepEqual(await review.api('/api/state'), state);
+});
+
+test('session capability file uses owner-only POSIX permissions', {
+  skip: process.platform === 'win32' ? 'Windows uses ACLs rather than POSIX mode bits.' : false,
+}, async t => {
+  const review = await fixture(t);
+  assert.equal((await stat(review.sessionFile)).mode & 0o777, 0o600);
+});
+
+test('document titles preserve spaces and Unicode without the directory path', async t => {
+  const name = 'Review 标题 #1.md';
+  const review = await fixture(t, { name });
+  assert.equal((await review.api('/api/state')).title, name);
 });
 
 test('state recomputes the UTF-8 hash, escaped rendering, and line anchors after source changes', async t => {

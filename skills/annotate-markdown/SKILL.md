@@ -31,6 +31,8 @@ node <skill-dir>/scripts/review.mjs start /absolute/path/document.md --target "e
 
 `start` detaches only the local preview server. It writes a private temporary session descriptor, not source files. `serve` is the foreground alternative. The localhost URL contains a capability token in its fragment; treat that link and the descriptor as private. Never post them to another service.
 
+The descriptor uses mode `0600` on POSIX systems. On Windows it inherits filesystem ACLs; the skill does not configure them. On a shared machine, use a temporary directory restricted to your account.
+
 4. Open `url` in the user's browser if allowed, or provide the link. Use the exact emitted URL, including its fragment. It is valid only on the machine running the server.
 5. Start a **background** wait command using the captured absolute descriptor path:
 

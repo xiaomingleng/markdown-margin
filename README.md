@@ -54,6 +54,14 @@ Run the tests:
 npm test --prefix skills/annotate-markdown
 ```
 
+CI runs both variants on Windows, Linux, and macOS with Node.js 22.
+The POSIX-only permission test is explicitly skipped on Windows.
+
 The preview server binds to loopback. Its URL contains a private capability
 token; do not share the URL or session descriptor. It does not publish documents,
 load remote images, edit the source directly, or call a model.
+
+Session descriptors are created with mode `0600` on POSIX systems. On Windows,
+access depends on inherited filesystem ACLs, not POSIX mode bits; the skill
+does not configure ACLs. Use a temporary directory whose ACLs restrict access
+to your account when reviewing private documents on a shared machine.
