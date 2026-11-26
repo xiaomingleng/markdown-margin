@@ -9,6 +9,8 @@ agent revise the source. Margin turns document review into a simple loop:
 **Leave feedback where it belongs.** Select a passage to comment, or add a
 one-click **Delete** or **Refine** request.
 
+![Selection popup with Comment, Delete, ? Ask, and Refine actions](docs/selection-demo.png)
+
 **Ask and get an answer.** Choose **? Ask** for a question about selected text.
 Your agent must answer, even if it also fixes an obvious defect. Each submitted
 comment gets an **Answer** and **Action taken** card, plus a brief chat reply.
@@ -16,13 +18,13 @@ Question-only replies can leave the document unchanged; additional edits must
 be explained explicitly. Cards remain visible after source refreshes and later
 submissions during the same review session.
 
-![Selected text and the Comment, Delete, and Refine actions](docs/selection-demo.png)
+![An answered question with separate Answer and Action taken sections](docs/answers-demo.png)
 
 **Review drafts before applying.** Save and edit comments, then submit them
 together. The preview refreshes after your agent edits the source; existing
 drafts are kept and changed source anchors can be reselected.
 
-![A saved comment with edit controls and the Apply feedback button](docs/comments-demo.png)
+![A saved question draft with Question - answer required, Refine, and Delete controls](docs/comments-demo.png)
 
 **Review images and diagrams too.** View local images and Mermaid diagrams,
 switch to their source code, and comment on the whole image, graph, or a code
